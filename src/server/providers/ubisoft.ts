@@ -681,6 +681,72 @@ async function probeStatNames(
   return results;
 }
 
+/**
+ * Operator-only: try candidate endpoint paths against Ubisoft's public service
+ * and report what each one answers.
+ *
+ * The provider reads five endpoints. Whether the service exposes anything else
+ * useful for this game is not documented anywhere, so the only way to find out
+ * is to ask and read the status: 404 means the route does not exist, 401/403
+ * means it exists but this session may not have it, 200 means there is
+ * something there worth decoding.
+ *
+ * Deliberately narrow, because a "fetch any URL" helper behind a token is an
+ * SSRF waiting to happen:
+ *
+ *   - callers pass a *path*, never a URL, and it is always joined onto
+ *     public-ubiservices.ubi.com — no other host is reachable;
+ *   - GET only, so nothing can be created or changed;
+ *   - {profileId} and {spaceId} are substituted rather than free-typed;
+ *   - responses come back through the same redactor as every other trace.
+ */
+async function probePaths(
+  profileId: string,
+  paths: string[],
+  trace: TraceCollector,
+): Promise<Array<{ path: string; status: number | null; ok: boolean; snippet: string }>> {
+  const current = await login(trace);
+  const results: Array<{ path: string; status: number | null; ok: boolean; snippet: string }> = [];
+
+  for (const template of paths) {
+    // A path, never a URL: anything that tries to escape the host is refused
+    // rather than quietly rewritten into a request somewhere else.
+    if (!template.startsWith('/') || template.startsWith('//') || template.includes('..')) {
+      results.push({ path: template, status: null, ok: false, snippet: 'rejected: not a relative path' });
+      continue;
+    }
+    const path = template
+      .replaceAll('{profileId}', encodeURIComponent(profileId))
+      .replaceAll('{spaceId}', encodeURIComponent(FOR_HONOR_SPACE_IDS[1]));
+    try {
+      const response = await tracedFetch(
+        {
+          provider: info.id,
+          label: `Probe path ${template}`,
+          url: `${UBI_SERVICES}${path}`,
+          headers: authHeaders(current),
+          timeoutMs: 8000,
+        },
+        trace,
+      );
+      results.push({
+        path,
+        status: response.status,
+        ok: response.ok,
+        snippet: response.text.slice(0, 300),
+      });
+    } catch (error) {
+      results.push({
+        path,
+        status: null,
+        ok: false,
+        snippet: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return results;
+}
+
 export const __internal = {
   login,
   authHeaders,
@@ -688,6 +754,7 @@ export const __internal = {
   invalidateCachedSession,
   forceRefresh,
   probeStatNames,
+  probePaths,
   UBI_SERVICES,
   PLATFORMS,
   info,

@@ -103,6 +103,27 @@ export async function GET(request: Request) {
     };
   }
 
+  // Optional endpoint-path probe. Same discipline as the stat probe: a path
+  // rather than a URL, joined onto Ubisoft's public service and no other host,
+  // GET only, operator token required.
+  const probePathList = (url.searchParams.get('probePaths') ?? '')
+    .split(',')
+    .map((path) => path.trim())
+    .filter(Boolean)
+    .slice(0, 40);
+  let pathProbe: unknown = null;
+  if (username && probePathList.length > 0) {
+    const pathTrace = newTraceCollector();
+    try {
+      const identity = await ubisoftProvider.getPlayerByUsername(username, pathTrace);
+      pathProbe = identity
+        ? { profileId: identity.id, results: await ubisoftInternal.probePaths(identity.id, probePathList, pathTrace) }
+        : { error: 'No Ubisoft profile matched that username.' };
+    } catch (error) {
+      pathProbe = { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
@@ -134,6 +155,7 @@ export async function GET(request: Request) {
       query: username,
       result,
       statProbe,
+      pathProbe,
     },
     { status: 200, headers: { 'Cache-Control': 'no-store' } },
   );
