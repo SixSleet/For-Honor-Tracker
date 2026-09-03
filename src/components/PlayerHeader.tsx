@@ -35,11 +35,6 @@ interface Tile {
   accent?: string;
 }
 
-/** "Aug 2016", for a start date where the day adds nothing. */
-function monthYear(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(LOCALE, { year: 'numeric', month: 'long' });
-}
-
 /**
  * The identity band and headline figures — everything a player looks up first,
  * in one strip above the detail panels.
@@ -130,8 +125,10 @@ export function PlayerHeader({ report, username }: { report: PlayerReport; usern
             ))}
           </div>
 
-          {/* When they started, when they last played, and when we last looked
-              — three different times that were all missing before. */}
+          {/* When they last played, and when we last looked. There is no
+              "playing since" here: Ubisoft's stat card only dates when it
+              created each counter, which is the same pre-release date for
+              every account, so it says nothing about this player. */}
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-dim">
             {report.lastPlayedAt ? (
               <span
@@ -141,12 +138,6 @@ export function PlayerHeader({ report, username }: { report: PlayerReport; usern
               >
                 Last played{' '}
                 <span className="text-ink">{relativeTime(report.lastPlayedAt)}</span>
-              </span>
-            ) : null}
-            {report.firstPlayedAt ? (
-              <span>
-                Playing since{' '}
-                <span className="text-ink">{monthYear(report.firstPlayedAt)}</span>
               </span>
             ) : null}
             <span className="text-ink-faint">

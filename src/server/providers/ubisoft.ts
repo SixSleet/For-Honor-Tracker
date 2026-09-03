@@ -14,7 +14,7 @@ import {
   mapForHonorStats,
   mergeSpaceStats,
   platformProfiles,
-  playedRangeFromStatCard,
+  lastPlayedFromStatCard,
   type PlatformProfiles,
   type RawPlatformProfile,
   type RawStats,
@@ -548,8 +548,9 @@ async function fetchProfileStats(
  * carries Ubisoft's player-facing label for every stat, including one per hero
  * ("Warden Reputation", "Jiang Jun Reputation"), plus each stat's first and
  * last write. That is the only authoritative source for what Ubisoft's hero
- * codenames actually mean, and the only source anywhere for when a player
- * started and when they last played.
+ * codenames actually mean, and — through the last write — the only source for
+ * when a player last played. The first write is not a player fact: it is when
+ * Ubisoft created the counter, identical on every account.
  *
  * Requires Ubi-LocaleCode; without it Ubisoft answers 400 before even checking
  * the ticket.
@@ -750,7 +751,7 @@ export const ubisoftProvider: DataProvider = {
       fetchSessionCount(current, identity.id, applicationIds, trace),
     ]);
     const heroFacts = heroFactsFromStatCard(statCard);
-    const played = playedRangeFromStatCard(statCard);
+    const lastPlayedAt = lastPlayedFromStatCard(statCard);
 
     // Ubisoft has no achievement data of its own for For Honor, but it does
     // say which Steam account this one is linked to — and Steam publishes
@@ -778,7 +779,7 @@ export const ubisoftProvider: DataProvider = {
     // the exact moment Ubisoft last wrote these figures, and the page states
     // it. The warning is kept only for a report that has no such timestamp,
     // where a reader would otherwise have nothing to judge freshness by.
-    if (hasStats && played.lastPlayedAt === null) {
+    if (hasStats && lastPlayedAt === null) {
       notices.push(
         'Ubisoft updates these figures on its own schedule, so very recent play may not be counted yet.',
       );
@@ -806,8 +807,7 @@ export const ubisoftProvider: DataProvider = {
       provider: info,
       fetchedAt: Date.now(),
       cached: false,
-      firstPlayedAt: played.firstPlayedAt,
-      lastPlayedAt: played.lastPlayedAt,
+      lastPlayedAt,
       platforms: platforms.links,
       season: mapped.season,
       overview: {

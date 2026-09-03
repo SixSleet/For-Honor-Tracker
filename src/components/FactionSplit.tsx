@@ -7,7 +7,6 @@ interface Row {
   heroes: number;
   reputation: number;
   hours: number;
-  matches: number;
   share: number;
 }
 
@@ -25,11 +24,10 @@ export function FactionSplit({ items }: { items: HeroStat[] }) {
     const faction = hero.faction ?? 'Unknown';
     const row =
       tally.get(faction) ??
-      { faction, heroes: 0, reputation: 0, hours: 0, matches: 0, share: 0 };
+      { faction, heroes: 0, reputation: 0, hours: 0, share: 0 };
     row.heroes += 1;
     row.reputation += hero.reputation ?? 0;
     row.hours += hero.timePlayedHours ?? 0;
-    row.matches += hero.matches ?? 0;
     tally.set(faction, row);
   }
 

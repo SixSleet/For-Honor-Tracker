@@ -164,8 +164,6 @@ export interface PlayerReport {
   };
   /** Anything the provider wants the user to know about this specific result. */
   notices: string[];
-  /** When the player first played the game, epoch ms, when the source says. */
-  firstPlayedAt?: number | null;
   /** When they last played, epoch ms, when the source says. */
   lastPlayedAt?: number | null;
   /** The platforms this account plays on, and what it is called on each. */

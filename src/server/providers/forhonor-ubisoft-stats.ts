@@ -83,22 +83,23 @@ export function heroFactsFromStatCard(cards: StatCardEntry[]): Map<string, HeroC
 }
 
 /**
- * When the player started, and when they last played, from the stat card's
- * timestamps: the earliest stat start date and the latest change to any stat.
+ * When the player last played, from the latest change to any stat on the card.
+ *
+ * There is deliberately no "first played" counterpart. The card also carries a
+ * `startDate` per stat, and it is tempting to read the earliest one as the day
+ * the player started — but it is the date Ubisoft *defined the counter*, not
+ * the date this account first played. It reads 2016-10-29 on every account,
+ * which is before For Honor released in February 2017, so it cannot be anyone's
+ * start date. Ubisoft exposes no per-account first-played timestamp, so the
+ * report says nothing rather than repeating a constant as if it were personal.
  */
-export function playedRangeFromStatCard(cards: StatCardEntry[]): {
-  firstPlayedAt: number | null;
-  lastPlayedAt: number | null;
-} {
-  let first: number | null = null;
+export function lastPlayedFromStatCard(cards: StatCardEntry[]): number | null {
   let last: number | null = null;
   for (const card of cards) {
-    const start = epoch(card.startDate);
-    if (start !== null && (first === null || start < first)) first = start;
     const modified = epoch(card.lastModified);
     if (modified !== null && (last === null || modified > last)) last = modified;
   }
-  return { firstPlayedAt: first, lastPlayedAt: last };
+  return last;
 }
 
 /** The raw stat entry shape Ubisoft returns. */

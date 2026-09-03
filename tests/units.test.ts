@@ -240,13 +240,14 @@ import {
   heroFactsFromStatCard,
   mapForHonorStats,
   mergeSpaceStats,
-  playedRangeFromStatCard,
+  lastPlayedFromStatCard,
 } from '../src/server/providers/forhonor-ubisoft-stats.ts';
 import type { RawStats } from '../src/server/providers/forhonor-ubisoft-stats.ts';
 import {
   cleanHandle,
   platformProfiles,
 } from '../src/server/providers/forhonor-ubisoft-stats.ts';
+import { MAX_REPUTATION, repPercent } from '../src/shared/reputation.ts';
 
 const s = (value: string | number) => ({ value: String(value) });
 
@@ -722,21 +723,41 @@ test('the roster\u2019s name is kept when Ubisoft\u2019s label is a shorter form
   assert.ok(mapped.heroes[0].portraitUrl);
 });
 
-test('first and last played come from the stat card\u2019s own timestamps', () => {
-  const range = playedRangeFromStatCard([
+test('last played is the newest stat change, and no start date is inferred', () => {
+  // startDate is when Ubisoft defined the counter, not when this account
+  // started playing: it reads 2016-10-29 on every profile, months before For
+  // Honor released. Only lastModified says anything about this player.
+  const cards = [
     { statName: 'CampaignProgression', startDate: '2016-10-29T00:43:00.000Z', lastModified: '2025-09-11T16:26:46.962Z' },
     { statName: 'Reputation', startDate: '2016-10-29T00:45:00.000Z', lastModified: '2026-08-31T17:31:43.196Z' },
     { statName: 'KillTotal', startDate: '2016-10-29T01:08:00.000Z', lastModified: '2026-08-31T17:31:43.196Z' },
-  ]);
-  assert.equal(range.firstPlayedAt, Date.parse('2016-10-29T00:43:00.000Z'));
-  assert.equal(range.lastPlayedAt, Date.parse('2026-08-31T17:31:43.196Z'));
+  ];
+  assert.equal(lastPlayedFromStatCard(cards), Date.parse('2026-08-31T17:31:43.196Z'));
 
   // Nothing usable in, nothing invented out.
-  assert.deepEqual(playedRangeFromStatCard([]), { firstPlayedAt: null, lastPlayedAt: null });
-  assert.deepEqual(playedRangeFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), {
-    firstPlayedAt: null,
-    lastPlayedAt: null,
-  });
+  assert.equal(lastPlayedFromStatCard([]), null);
+  assert.equal(lastPlayedFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), null);
+});
+
+test('the reputation rail is drawn against the game cap, not the best hero', () => {
+  // The bug this replaces: the rail was scaled to the roster's own top hero,
+  // so the best hero always read 100% even at reputation 5.
+  assert.equal(MAX_REPUTATION, 80);
+  assert.equal(repPercent(80), 100);
+  assert.equal(repPercent(40), 50);
+  assert.equal(repPercent(44), 55);
+  assert.equal(repPercent(8), 10);
+
+  // A roster whose best hero is far from the cap must not render as full.
+  assert.ok(repPercent(44) < 100);
+
+  // Nothing usable in, empty rail out — never a stray sliver or an overflow.
+  assert.equal(repPercent(0), 0);
+  assert.equal(repPercent(null), 0);
+  assert.equal(repPercent(undefined), 0);
+  assert.equal(repPercent(-5), 0);
+  assert.equal(repPercent(Number.NaN), 0);
+  assert.equal(repPercent(999), 100);
 });
 
 test('play sessions and average session come from the play-history count', () => {
