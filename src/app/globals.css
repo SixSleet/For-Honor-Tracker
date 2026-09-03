@@ -1,0 +1,293 @@
+@import 'tailwindcss';
+
+/*
+ * For Honor Tracker — visual system.
+ *
+ * A cool, near-black product surface with one warm accent. The earlier theme
+ * leaned on serif small-caps, square bevelled plates and a brown-black ground,
+ * which read as a lore page rather than a tool; this one is built like a
+ * dashboard: neutral surfaces stacked by elevation, soft radii, hairline
+ * borders, and colour reserved for meaning.
+ *
+ * Colour carries three jobs and never mixes them:
+ *   accent  — the product's own voice (search, links, the player's own rank)
+ *   faction — categorical identity, five hues, validated for colour-vision
+ *             deficiency (see FACTION_COLORS in src/shared/faction.ts)
+ *   status  — good / warning / bad, reserved, never reused as a sixth faction
+ *
+ * Figures always carry a text colour, never a faction colour: a coloured dot
+ * or bar beside them carries the identity instead. That keeps every number
+ * legible and keeps identity from resting on colour alone.
+ */
+@theme {
+  /* Surfaces, by elevation. */
+  --color-canvas: #0a0c10;
+  --color-surface: #111419;
+  --color-surface-2: #171b22;
+  --color-surface-3: #1e242d;
+  --color-line: #252c37;
+  --color-line-strong: #333c4a;
+
+  /* Ink. */
+  --color-ink: #e9edf3;
+  --color-ink-dim: #9aa5b4;
+  /* Chosen to clear 4.5:1 against every surface in this file — the
+     previous value managed only 3.3–4.1, and it carries every small label
+     on the page. */
+  --color-ink-faint: #858f9f;
+
+  /* The product accent. */
+  --color-accent: #ff6a2b;
+  --color-accent-bright: #ff8a55;
+  --color-accent-deep: #c2440f;
+
+  /* Status — reserved. */
+  --color-good: #34c281;
+  --color-warn: #e0b341;
+  --color-bad: #e35d54;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, Roboto, Helvetica, Arial,
+    sans-serif;
+
+  --radius-card: 12px;
+  --radius-control: 9px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    /* One soft light source at the top, so large dark areas are not flat. */
+    background-image: radial-gradient(
+      1200px 600px at 50% -10%,
+      rgba(255, 106, 43, 0.09),
+      transparent 70%
+    );
+    background-attachment: fixed;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: rgba(255, 106, 43, 0.28);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  * {
+    scrollbar-color: var(--color-line-strong) transparent;
+    scrollbar-width: thin;
+  }
+}
+
+@layer components {
+  /* A surface that sits above the page. */
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+  }
+
+  /* A titled section. The heading is inside the frame, so a column of panels
+     reads as one dashboard rather than as separate pages. */
+  .panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    min-width: 0;
+  }
+  .panel > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-surface-2);
+  }
+
+  /* A figure: small label, large tabular number. */
+  .tile {
+    background: var(--color-surface);
+    padding: 0.8rem 0.95rem;
+    min-width: 0;
+    /* A row rule only. Column rules were drawn as a right-edge hairline on
+       every tile, which left a bordered empty box beside the last figure
+       whenever a row was not full — CSS grid cannot collapse a partial last
+       row, so the separator has to go rather than the gap. */
+    box-shadow: 0 1px 0 var(--color-line);
+  }
+  .tile-label {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+    color: var(--color-ink-faint);
+    text-transform: uppercase;
+    /* Long labels wrap; they are never cut off mid-word. */
+    overflow-wrap: break-word;
+  }
+
+  /* Every figure on the page. Tabular so columns of numbers line up, and
+     slightly tightened so long counts stay compact. */
+  .numeral {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
+    font-weight: 600;
+  }
+
+  /* A pill: filters, view switches, jump links. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface-2);
+    color: var(--color-ink-dim);
+    padding: 0.32rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+    white-space: nowrap;
+    transition:
+      border-color 0.15s ease,
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+  .chip:hover {
+    color: var(--color-ink);
+    border-color: var(--color-line-strong);
+    background: var(--color-surface-3);
+  }
+  .chip[aria-pressed='true'] {
+    color: var(--color-ink);
+    border-color: color-mix(in srgb, var(--accent, var(--color-accent)) 55%, transparent);
+    background: color-mix(in srgb, var(--accent, var(--color-accent)) 15%, transparent);
+  }
+
+  /* Text input / select. */
+  .field {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    color: var(--color-ink);
+    transition:
+      border-color 0.15s ease,
+      background-color 0.15s ease;
+  }
+  .field::placeholder {
+    color: var(--color-ink-faint);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    background: var(--color-surface-3);
+  }
+
+  .btn-accent {
+    background: var(--color-accent);
+    color: #1a0c05;
+    border-radius: var(--radius-control);
+    font-weight: 650;
+    transition: background-color 0.15s ease;
+  }
+  .btn-accent:hover {
+    background: var(--color-accent-bright);
+  }
+  .btn-quiet {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-control);
+    color: var(--color-ink-dim);
+    font-weight: 550;
+    transition:
+      color 0.15s ease,
+      border-color 0.15s ease;
+  }
+  .btn-quiet:hover {
+    color: var(--color-ink);
+    border-color: var(--color-line-strong);
+  }
+
+  /* A hero card. The faction accent is a hairline down its leading edge, not
+     the text colour — the name stays in ink so it is always legible. */
+  .hero-card {
+    position: relative;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-card);
+    min-width: 0;
+    transition:
+      border-color 0.15s ease,
+      background-color 0.15s ease;
+  }
+  .hero-card:hover {
+    border-color: var(--color-line-strong);
+    background: var(--color-surface-2);
+  }
+
+  /* A thin rail filled to --value (0–100%) in --accent. Rounded data-end,
+     anchored to the baseline, per the chart mark spec. */
+  .meter {
+    height: 5px;
+    background: var(--color-surface-3);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .meter > span {
+    display: block;
+    height: 100%;
+    width: var(--value, 0%);
+    background: var(--accent, var(--color-accent));
+    border-radius: 999px;
+    transition: width 0.4s ease;
+  }
+
+  /* Won versus lost, drawn to scale, with a 2px gap so the two fills read as
+     separate marks rather than one blended bar. */
+  .split-bar {
+    display: flex;
+    gap: 2px;
+    height: 6px;
+  }
+  .split-bar > span {
+    border-radius: 999px;
+  }
+  .split-bar > .won {
+    background: var(--color-good);
+  }
+  .split-bar > .lost {
+    background: var(--color-surface-3);
+  }
+
+  /* A faction swatch: the categorical mark that carries identity beside text. */
+  .swatch {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    flex: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
