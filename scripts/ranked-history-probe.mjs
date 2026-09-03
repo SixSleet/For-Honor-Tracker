@@ -97,6 +97,42 @@ function interestingConfig(body) {
   return { entries: entries.slice(0, 160), urls: urls.slice(0, 30) };
 }
 
+function targetedRankConfig(body) {
+  const out = [];
+  function walk(v, path = '', depth = 0) {
+    if (depth > 8 || v == null) return;
+    if (Array.isArray(v)) {
+      if (/(rank|leader|skillrating|competitive)/i.test(path)) out.push(`${path}[${v.length}]`);
+      return v.slice(0, 100).forEach((x) => walk(x, `${path}[]`, depth + 1));
+    }
+    if (typeof v !== 'object') return;
+    for (const [k, x] of Object.entries(v)) {
+      const p = path ? `${path}.${k}` : k;
+      const hit = /(ranked|ranking|leaderboard|skillrating|rankpoint|grandmaster|masterrank|competitive)/i.test(p);
+      if (hit && ['string','number','boolean'].includes(typeof x)) out.push(`${p}=${clean(x)}`);
+      walk(x, p, depth + 1);
+    }
+  }
+  walk(body);
+  return out.slice(0, 240);
+}
+
+function matchingResourceNames(body) {
+  const out = [];
+  function walk(v) {
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v)) return v.forEach(walk);
+    const name = typeof v.name === 'string' ? v.name : '';
+    const url = typeof v.url === 'string' ? v.url : '';
+    if (/(rank|leader|match|skill)/i.test(name + ' ' + url)) {
+      out.push(`${clean(name || '<unnamed>')}=>${url ? clean(url) : '<no-url>'}`);
+    }
+    for (const x of Object.values(v)) walk(x);
+  }
+  walk(body);
+  return [...new Set(out)].slice(0, 120);
+}
+
 async function storedSession() {
   if (process.env.UBISOFT_TICKET) return {
     ticket: process.env.UBISOFT_TICKET,
@@ -163,7 +199,6 @@ async function main() {
   const groups = encodeURIComponent('us-sdkClientFeaturesSwitches,us-sdkClientUrls');
   const exact = [];
 
-  // Current web-client application config: useful as a control.
   const configUrls = [
     `${UBI}/v1/applications/${encodeURIComponent(appId)}/parameters?parameterGroups=${groups}`,
     `${UBI}/v1/applications/${encodeURIComponent(appId)}/parameters?spaceId=${FH_SPACE}&sandbox=HERO_PC_LNCH_A&parameterGroups=${groups}`,
@@ -175,8 +210,6 @@ async function main() {
     await inspectConfig(`app-config-${i+1}`, x, exact);
   }
 
-  // Space configuration can advertise title-specific service groups even when
-  // the web-client application config is intentionally minimal.
   const spaceUrls = [
     `${UBI}/v1/spaces/${FH_SPACE}/parameters?parameterGroups=${groups}`,
     `${UBI}/v1/spaces/${FH_SPACE}/parameters`,
@@ -186,11 +219,13 @@ async function main() {
   for (let i=0; i<spaceUrls.length; i++) {
     const x = await probe(`space-config-${i+1}`, spaceUrls[i], headers);
     await inspectConfig(`space-config-${i+1}`, x, exact);
+    if (x?.ok) try {
+      const body = JSON.parse(x.text);
+      const targeted = targetedRankConfig(body);
+      if (targeted.length) log(`space-config-${i+1}: ranked_targeted=${targeted.join('|')}`);
+    } catch {}
   }
 
-  // Public application metadata lookup observed in Ubisoft Connect clients.
-  // We only print application UUIDs returned for the already-public For Honor
-  // space IDs; no profile/account metadata is logged.
   const appLookups = [
     `${API_UBI}/v2/applications?spaceIds=${FH_SPACE}`,
     `${API_UBI}/v2/applications?spaceIds=${LEGACY_SPACE}`,
@@ -208,8 +243,6 @@ async function main() {
     } catch {}
   }
 
-  // Inspect only public application configuration for IDs explicitly returned
-  // by the known For Honor space metadata lookup.
   let appNo = 0;
   for (const candidate of [...discoveredApps].slice(0, 8)) {
     appNo++;
@@ -220,7 +253,23 @@ async function main() {
     ]) {
       const x = await probe(`discovered-app-${appNo}-${suffix}`, url, h);
       await inspectConfig(`discovered-app-${appNo}-${suffix}`, x, exact);
+      if (suffix === 'configuration' && x?.ok) try {
+        const names = matchingResourceNames(JSON.parse(x.text));
+        if (names.length) log(`discovered-app-${appNo}-configuration: matching_resources=${names.join('|')}`);
+      } catch {}
     }
+  }
+
+  const titleBases = [
+    ['ranking-v1', `${UBI}/v1/spaces/${FH_SPACE}/title/hero/hero-live/heroranking/public/v1/`],
+    ['ranking-v2', `${UBI}/v1/spaces/${FH_SPACE}/title/hero/hero-live/heroranking/public/v2/`],
+    ['leaderboard-v1', `${UBI}/v1/spaces/${FH_SPACE}/title/hero/hero-live/heroleaderboard/public/v1/`],
+    ['skillrating-v1', `${UBI}/v1/spaces/${FH_SPACE}/title/hero/hero-live/skillrating/public/v1/`],
+  ];
+  const docSuffixes = ['openapi.json', 'swagger.json', 'swagger/v1/swagger.json'];
+  for (const [name, base] of titleBases) {
+    for (const suffix of docSuffixes) await probe(`title-${name}-docs-${suffix.replaceAll('/', '-')}`, `${base}${suffix}`, headers);
+    for (const suffix of ['rankings', 'leaderboards', 'seasons']) await probe(`title-${name}-${suffix}`, `${base}${suffix}`, headers);
   }
 
   const boards = await probe('leaderboard-space-collection', `${UBI}/v1/spaces/${FH_SPACE}/leaderboards?offset=0&limit=20`, headers);
