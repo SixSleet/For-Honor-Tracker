@@ -7,6 +7,7 @@ import type {
 } from '@/shared/types';
 import { env, ubisoftConfigured } from '../env';
 import { parseJson, tracedFetch, type TraceCollector } from '../http';
+import { redactBody } from '../redact';
 import { readSession, writeSession } from '../ubisoft-session-store';
 import {
   FOR_HONOR_SPACE_IDS,
@@ -733,7 +734,10 @@ async function probePaths(
         path,
         status: response.status,
         ok: response.ok,
-        snippet: response.text.slice(0, 300),
+        // Redacted like every other trace body. 300 characters was too short
+        // to read a response worth discovering, and an unredacted snippet
+        // would have been a hole in exactly the claim this probe makes.
+        snippet: redactBody(response.text, 4000),
       });
     } catch (error) {
       results.push({
