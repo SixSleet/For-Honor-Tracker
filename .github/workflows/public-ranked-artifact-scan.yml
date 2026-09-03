@@ -1,0 +1,82 @@
+name: Public ranked artifact scan
+
+on:
+  push:
+    branches:
+      - chatgpt-follow-claude-endpoints-v2
+    paths:
+      - '.github/workflows/public-ranked-artifact-scan.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Scan Ubisoft public playlist bundles
+        shell: python
+        run: |
+          import json, re, urllib.request
+
+          bundles = [
+              '3802.0.0-prod-tym-week2-v1',
+              '3802.0.0-prod-tym-w3-v1',
+          ]
+          host = 'https://playlists-2.forhonor.ubisoft.com'
+          rx = re.compile(r'leader|rank|skill|season|competitive|league|division|placement|rating|\bmmr\b|\belo\b|tier', re.I)
+          url_rx = re.compile(r'https?://', re.I)
+
+          def scalar(v):
+              return v is None or isinstance(v, (str, int, float, bool))
+
+          def walk(v, path='', hits=None, urls=None, depth=0):
+              if hits is None: hits=[]
+              if urls is None: urls=[]
+              if depth > 12: return hits, urls
+              if isinstance(v, list):
+                  for i, x in enumerate(v):
+                      walk(x, f'{path}[{i}]', hits, urls, depth + 1)
+              elif isinstance(v, dict):
+                  for k, x in v.items():
+                      p = f'{path}.{k}' if path else k
+                      if scalar(x):
+                          text = str(x)
+                          if rx.search(k) or rx.search(text):
+                              hits.append((p, text))
+                          if isinstance(x, str) and url_rx.search(x):
+                              urls.append((p, x))
+                      walk(x, p, hits, urls, depth + 1)
+              return hits, urls
+
+          for bundle in bundles:
+              print(f'[PUBLIC_RANK_SCAN] bundle={bundle}')
+              req = urllib.request.Request(f'{host}/{bundle}.json', headers={'User-Agent':'For-Honor-public-config-research/1.0'})
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  body = json.load(r)
+              print('[PUBLIC_RANK_SCAN] top_level=' + ','.join(sorted(body.keys())))
+              hits, urls = walk(body)
+              seen = set()
+              for p, v in hits:
+                  key = (p, v)
+                  if key in seen: continue
+                  seen.add(key)
+                  print(f'[PUBLIC_RANK_SCAN] hit {p}={v[:300]}')
+              seen_urls = set()
+              for p, v in urls:
+                  if v in seen_urls: continue
+                  seen_urls.add(v)
+                  print(f'[PUBLIC_RANK_SCAN] url {p}={v[:500]}')
+              # Explicitly inventory key names even where their values are objects.
+              keys = set()
+              def keywalk(v):
+                  if isinstance(v, dict):
+                      for k, x in v.items():
+                          if rx.search(k): keys.add(k)
+                          keywalk(x)
+                  elif isinstance(v, list):
+                      for x in v: keywalk(x)
+              keywalk(body)
+              print('[PUBLIC_RANK_SCAN] matching_keys=' + ','.join(sorted(keys)))
