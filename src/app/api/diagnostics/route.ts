@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { env } from '@/server/env';
 import { checkRateLimit, clientKeyFrom } from '@/server/rate-limit';
 import { allProviders } from '@/server/providers/registry';
+import { newTraceCollector } from '@/server/http';
+import { ubisoftProvider, __internal as ubisoftInternal } from '@/server/providers/ubisoft';
 import { searchPlayer } from '@/server/search';
 import { readSession, storeBackend } from '@/server/ubisoft-session-store';
 
@@ -62,6 +64,32 @@ export async function GET(request: Request) {
     ? await searchPlayer(username, { refresh: true, includeDiagnostics: true })
     : null;
 
+  // Optional stat-name probe. Ubisoft's stats endpoint returns a fixed default
+  // set, but also honours an explicit statNames list, so a stat it knows and
+  // does not return by default can only be found by asking for it. Off unless
+  // asked for, one profile at a time, and read-only.
+  const probeNames = (url.searchParams.get('probeStats') ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .slice(0, 60);
+  let statProbe: unknown = null;
+  if (username && probeNames.length > 0) {
+    const probeTrace = newTraceCollector();
+    try {
+      const identity = await ubisoftProvider.getPlayerByUsername(username, probeTrace);
+      statProbe = identity
+        ? {
+            profileId: identity.id,
+            requested: probeNames,
+            spaces: await ubisoftInternal.probeStatNames(identity.id, probeNames, probeTrace),
+          }
+        : { error: 'No Ubisoft profile matched that username.' };
+    } catch (error) {
+      statProbe = { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   return NextResponse.json(
     {
       ok: true,
@@ -92,6 +120,7 @@ export async function GET(request: Request) {
       providers,
       query: username,
       result,
+      statProbe,
     },
     { status: 200, headers: { 'Cache-Control': 'no-store' } },
   );

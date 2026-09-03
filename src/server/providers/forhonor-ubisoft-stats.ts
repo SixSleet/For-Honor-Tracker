@@ -666,9 +666,15 @@ export function mapForHonorStats(
     {
       // Ubisoft's key is CampaignLastMissionCompleted — the index of the last
       // mission finished, not a count of missions finished.
+      //
+      // Zero is not mission zero, it is "never written": an account whose
+      // story the game reports as 100% complete still returns 0 here, so the
+      // row said "Last mission 0" directly under "Completion 100%". Dropped
+      // rather than printed, the same as any other figure the source does not
+      // actually hold.
       key: 'campaign-mission',
       label: 'Last mission',
-      value: campaignMission,
+      value: campaignMission === 0 ? null : campaignMission,
       kind: 'number',
     },
   ];

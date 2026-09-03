@@ -622,12 +622,72 @@ async function fetchAvatarUrl(profileId: string): Promise<string | undefined> {
  * login sits behind bot protection and is rate limited per account, so the
  * probe reuses this session rather than logging in again.
  */
+/**
+ * Operator-only: ask Ubisoft for stat names by name, and report which of them
+ * it actually holds for a profile.
+ *
+ * /v1/profiles/stats returns a fixed default set — 186 keys for a long-lived
+ * account — and that set is all this provider has ever seen. Ubisoft's stat
+ * service also accepts an explicit `statNames` list, and a name it knows but
+ * does not include by default will only ever appear if it is asked for. There
+ * is no catalogue of those names, so the only way to find one is to ask for a
+ * candidate and see whether a value comes back.
+ *
+ * This exists so that decoding more of For Honor's dictionary is a matter of
+ * running a probe rather than guessing. It never runs on a visitor's lookup:
+ * it is reachable only through the token-gated diagnostics route, and it only
+ * ever reads, one profile at a time.
+ */
+async function probeStatNames(
+  profileId: string,
+  names: string[],
+  trace: TraceCollector,
+): Promise<Array<{ spaceId: string; found: Record<string, string>; missing: string[] }>> {
+  const current = await login(trace);
+  const results: Array<{ spaceId: string; found: Record<string, string>; missing: string[] }> = [];
+
+  for (const spaceId of FOR_HONOR_SPACE_IDS) {
+    const response = await tracedFetch(
+      {
+        provider: info.id,
+        label: `Probe stat names on ${spaceId.slice(0, 8)} (GET /v1/profiles/stats?statNames=)`,
+        url:
+          `${UBI_SERVICES}/v1/profiles/stats?spaceId=${encodeURIComponent(spaceId)}` +
+          `&profileIds=${encodeURIComponent(profileId)}` +
+          `&statNames=${encodeURIComponent(names.join(','))}`,
+        headers: authHeaders(current),
+      },
+      trace,
+    );
+    if (!response.ok) {
+      results.push({ spaceId, found: {}, missing: names });
+      continue;
+    }
+    const stats =
+      parseJson<{ profiles?: Array<{ profileId: string; stats?: RawStats }> }>(response.text)
+        ?.profiles?.find((profile) => profile.profileId === profileId)?.stats ?? {};
+    const found: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(stats)) {
+      if (entry?.value !== undefined && entry.value !== null && entry.value !== '') {
+        found[key] = String(entry.value);
+      }
+    }
+    results.push({
+      spaceId,
+      found,
+      missing: names.filter((name) => !(name in found)),
+    });
+  }
+  return results;
+}
+
 export const __internal = {
   login,
   authHeaders,
   sessionFromTicket,
   invalidateCachedSession,
   forceRefresh,
+  probeStatNames,
   UBI_SERVICES,
   PLATFORMS,
   info,
