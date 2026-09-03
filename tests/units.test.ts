@@ -760,6 +760,70 @@ test('the reputation rail is drawn against the game cap, not the best hero', () 
   assert.equal(repPercent(999), 100);
 });
 
+test('spaces are merged family by family, so a ratio never crosses records', () => {
+  // Measured live on an account present in both For Honor spaces. The
+  // crossplay space (freshest) holds the fuller global aggregates; the
+  // per-platform space holds the fuller per-mode and per-hero counters.
+  const crossplay: RawStats = {
+    MetaGameSeason: s(38),
+    KillTotal: s(81406),
+    TimePlayedTotal: s(12550886),
+    Reputation: s(698),
+    SkillRatingDuelMu: s(47.49),
+    'MatchesPlayedpergamemode.S_Type.DMN': s(1388),
+    'MatchesWonpergamemode.T_Win.1.S_Type.DMN': s(1012),
+    HeroWarmongerTimePlayed: s(436320),
+    HeroWarmongerReputation: s(44),
+    'MatchesPlayedperHero.Hero.Hero_Warmonger': s(48),
+  };
+  const perPlatform: RawStats = {
+    MetaGameSeason: s(34),
+    KillTotal: s(53216),
+    TimePlayedTotal: s(8239294),
+    Reputation: s(441),
+    SkillRatingDuelMu: s(45.81),
+    'MatchesPlayedpergamemode.S_Type.DMN': s(4891),
+    'MatchesWonpergamemode.T_Win.1.S_Type.DMN': s(3220),
+    HeroWarmongerTimePlayed: s(300000),
+    HeroWarmongerReputation: s(30),
+    'MatchesPlayedperHero.Hero.Hero_Warmonger': s(575),
+  };
+  const merged = mergeSpaceStats([crossplay, perPlatform]);
+
+  // Global counters: the fuller reading wins, which here is the freshest.
+  assert.equal(merged.KillTotal.value, '81406');
+  assert.equal(merged.Reputation.value, '698');
+  assert.equal(merged.TimePlayedTotal.value, '12550886');
+
+  // Point-in-time values are never "maxed" — the freshest space keeps them.
+  assert.equal(merged.MetaGameSeason.value, '38');
+  assert.equal(merged.SkillRatingDuelMu.value, '47.49');
+
+  // The per-mode family comes from the space that recorded more of it, and
+  // both halves of the ratio travel together. Mixing them was the bug that
+  // made a win rate meaningless.
+  assert.equal(merged['MatchesPlayedpergamemode.S_Type.DMN'].value, '4891');
+  assert.equal(merged['MatchesWonpergamemode.T_Win.1.S_Type.DMN'].value, '3220');
+
+  // A hero's progression triple stays with the space that has the hours,
+  // while the separate per-hero match counter takes its own fuller reading.
+  assert.equal(merged.HeroWarmongerTimePlayed.value, '436320');
+  assert.equal(merged.HeroWarmongerReputation.value, '44');
+  assert.equal(merged['MatchesPlayedperHero.Hero.Hero_Warmonger'].value, '575');
+});
+
+test('the story campaign is a fraction, not a percentage already', () => {
+  // In game this account reads "STORY PROGRESSION 100.00%"; Ubisoft returns 1.
+  const done = mapForHonorStats({ CampaignProgression: s(1) });
+  assert.equal(done.overview.find((stat) => stat.key === 'campaign')?.value, 100);
+
+  const half = mapForHonorStats({ CampaignProgression: s(0.5) });
+  assert.equal(half.overview.find((stat) => stat.key === 'campaign')?.value, 50);
+
+  const none = mapForHonorStats({});
+  assert.equal(none.overview.find((stat) => stat.key === 'campaign')?.value, null);
+});
+
 test('play sessions and average session come from the play-history count', () => {
   // Ubisoft's stats dictionary has no session count; the play-history endpoint
   // does, and it is the only thing that makes an average session computable.
@@ -802,13 +866,14 @@ test('the headline figures find a stat wherever its section moved to', () => {
   }
 });
 
-test('an older space fills gaps only; it never overrides the current snapshot', () => {
-  // A player who predates crossplay has stats in two spaces and only one is
-  // still written to. Reading just the freshest threw away anything the older
-  // snapshot held and the newer one did not — but combining them figure by
-  // figure is worse: the two spaces are separate records, not a subset and a
-  // superset, so taking the larger of each produced a Dominion win rate that
-  // was the ratio of no real scope at all.
+test('a merged rate always comes from one space, never half from each', () => {
+  // A player who predates crossplay has stats in two spaces and neither is a
+  // superset of the other. Reading just the freshest threw most of the
+  // per-mode and per-hero record away; combining figure by figure is worse
+  // still, because it can take a rate's numerator from one space and its
+  // denominator from the other. Keys are therefore grouped into families and
+  // a family is taken whole, from whichever space recorded more of it — so
+  // whichever space wins, the pair stays internally consistent.
   const live: RawStats = {
     MetaGameSeason: { value: '38' },
     Reputation: { value: '697' },
@@ -832,13 +897,21 @@ test('an older space fills gaps only; it never overrides the current snapshot', 
   assert.equal(merged.Reputation.value, '697');
   assert.equal(merged.MetaGameSeason.value, '38');
   assert.equal(merged.Faction.value, 'vk');
-  // The pair stays internally consistent, so the derived rate stays true.
-  assert.equal(merged['MatchesPlayedpergamemode.S_Type.DMN'].value, '1368');
-  assert.equal(merged['MatchesWonpergamemode.T_Win.1.S_Type.DMN'].value, '996');
+
+  // The invariant that matters: played and won are whichever space's pair,
+  // never one from each. This space disagrees with itself — more matches
+  // played but fewer won — so it is exactly the case a key-by-key maximum
+  // would turn into a rate neither space reports.
+  const played = merged['MatchesPlayedpergamemode.S_Type.DMN'].value;
+  const won = merged['MatchesWonpergamemode.T_Win.1.S_Type.DMN'].value;
+  assert.ok(
+    (played === '1368' && won === '996') || (played === '1600' && won === '900'),
+    `played ${played} and won ${won} came from different spaces`,
+  );
   const rate = mapForHonorStats(merged).extraGroups
     .find((group) => group.key === 'matches-by-type')
     ?.stats.find((stat) => stat.key === 'win-rate')?.value;
-  assert.equal(rate, Math.round((996 / 1368) * 1000) / 10);
+  assert.equal(rate, Math.round((Number(won) / Number(played)) * 1000) / 10);
 
   // The hero only the old space knows about still survives.
   assert.equal(merged.HeroKnightChampionReputation.value, '9');

@@ -6,12 +6,13 @@ import { FACTION_ORDER, factionStyle } from '@/shared/faction';
 import { LOCALE } from '@/shared/format';
 import { MAX_REPUTATION, repPercent } from '@/shared/reputation';
 
-type SortKey = 'reputation' | 'level' | 'time' | 'recent' | 'name';
+type SortKey = 'reputation' | 'level' | 'time' | 'matches' | 'recent' | 'name';
 type View = 'grid' | 'list';
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: 'reputation', label: 'Reputation' },
   { key: 'recent', label: 'Recently played' },
+  { key: 'matches', label: 'Matches' },
   { key: 'time', label: 'Hours' },
   { key: 'level', label: 'Level' },
   { key: 'name', label: 'A–Z' },
@@ -25,6 +26,8 @@ function compare(sort: SortKey, a: HeroStat, b: HeroStat): number {
       return (b.level ?? 0) - (a.level ?? 0);
     case 'time':
       return (b.timePlayedHours ?? 0) - (a.timePlayedHours ?? 0);
+    case 'matches':
+      return (b.matches ?? 0) - (a.matches ?? 0);
     case 'recent':
       return (b.lastPlayedAt ?? 0) - (a.lastPlayedAt ?? 0);
     default:
@@ -38,6 +41,10 @@ function compare(sort: SortKey, a: HeroStat, b: HeroStat): number {
 function hours(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
   return value >= 100 ? `${Math.round(value)}h` : `${value}h`;
+}
+
+function count(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : value.toLocaleString(LOCALE);
 }
 
 /** "3d", "5mo", "2y" — compact enough to sit in a card corner. */
@@ -142,9 +149,10 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
       rows.reduce(
         (acc, hero) => ({
           hours: acc.hours + (hero.timePlayedHours ?? 0),
+          matches: acc.matches + (hero.matches ?? 0),
           rep: acc.rep + (hero.reputation ?? 0),
         }),
-        { hours: 0, rep: 0 },
+        { hours: 0, matches: 0, rep: 0 },
       ),
     [rows],
   );
@@ -206,7 +214,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
           ))}
           <span className="numeral ml-auto text-[11px] font-medium text-ink-faint">
             {rows.length} shown · {totals.rep.toLocaleString(LOCALE)} rep ·{' '}
-            {Math.round(totals.hours).toLocaleString(LOCALE)}h
+            {Math.round(totals.hours).toLocaleString(LOCALE)}h · {totals.matches.toLocaleString(LOCALE)} matches
           </span>
         </div>
       </div>
@@ -250,9 +258,10 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
                   <span />
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-line pt-2.5">
+                <div className="mt-3 grid grid-cols-3 gap-2 border-t border-line pt-2.5">
                   <Figure label="Level" value={hero.level === null ? '—' : String(hero.level)} />
                   <Figure label="Hours" value={hours(hero.timePlayedHours)} />
+                  <Figure label="Games" value={count(hero.matches)} />
                 </div>
 
                 {last ? (
@@ -278,7 +287,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
             return (
               <li
                 key={hero.name}
-                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_repeat(3,minmax(3.5rem,auto))_minmax(4.5rem,auto)]"
+                className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors hover:bg-surface-2 sm:grid-cols-[auto_minmax(0,1fr)_repeat(4,minmax(3.5rem,auto))_minmax(4.5rem,auto)]"
               >
                 <Portrait hero={hero} size={32} />
                 <div className="min-w-0">
@@ -298,9 +307,10 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
                   </div>
                   <Figure label="Rep" value={hero.reputation === null ? '—' : String(hero.reputation)} />
                 </div>
-                <div className="col-span-3 grid grid-cols-3 gap-2 border-t border-line pt-2 sm:col-span-1 sm:contents sm:border-0 sm:pt-0">
+                <div className="col-span-3 grid grid-cols-4 gap-2 border-t border-line pt-2 sm:col-span-1 sm:contents sm:border-0 sm:pt-0">
                   <Figure label="Level" value={hero.level === null ? '—' : String(hero.level)} />
                   <Figure label="Hours" value={hours(hero.timePlayedHours)} />
+                  <Figure label="Games" value={count(hero.matches)} />
                   <Figure label="Played" value={last ?? '—'} />
                 </div>
               </li>

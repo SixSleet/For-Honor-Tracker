@@ -377,24 +377,120 @@ export interface MappedForHonorStats {
  * Combines the stat dictionaries of every For Honor space a player owns.
  *
  * A player who predates crossplay has stats in both a per-platform space and
- * the crossplay one, and only one of them is still written to. The freshest is
- * authoritative for every key it holds; the others may only fill in keys it
- * does not have at all — a hero played before the move to crossplay, say.
+ * the crossplay one, and neither is a superset of the other. Measured live on
+ * an account present in both: the crossplay space holds the fuller global
+ * aggregates (kills, deaths, playtime, reputation, games played), while the
+ * per-platform space holds the fuller per-mode, per-hero and matches-won
+ * counters — 9,103 Duel matches against the crossplay space's 954.
  *
- * Nothing is combined key by key. Taking the larger of each figure looked
- * appealing and was wrong: the two spaces are separate records, not a subset
- * and a superset, so max(matches played) over max(matches won) is a ratio of
- * no real scope at all. It shifted one account's Dominion win rate by two
- * points against figures that were already correct. Whatever the freshest
- * space says about a stat, it says about every stat derived from it too.
+ * Taking the freshest space wholesale therefore threw away most of the
+ * per-hero and per-mode record: it paired complete lifetime hours with a match
+ * counter that had barely been written to, so a hero showed 121 hours against
+ * 48 matches.
+ *
+ * A blanket key-by-key maximum is not the answer either, and was tried and
+ * reverted once before: it can take a ratio's numerator from one space and its
+ * denominator from the other, which is a rate of no real scope. So keys are
+ * combined by *family* instead. A family is a set of keys that only mean
+ * anything together — one mode's played and won, one hero's level, reputation
+ * and time — and a family is taken whole, from whichever space recorded more
+ * of it. Numerator and denominator can then never come from different records.
+ *
+ * Standalone counters are compared individually, and only when they are known
+ * to accumulate over an account's life. Anything else — the season, a
+ * current-season counter, a skill rating, the last match's kills — is a
+ * point-in-time value where "larger" means nothing, so the freshest space
+ * keeps it.
  */
+
+/**
+ * Standalone keys that only ever count upwards, so the larger reading is the
+ * more complete one. Deliberately an allow-list: an unrecognised key keeps the
+ * freshest space's value rather than being assumed to accumulate.
+ */
+const CUMULATIVE_KEYS = new Set([
+  'KillTotal',
+  'DeathTotal',
+  'AssistTotal',
+  'PlayersKilledanygamemode',
+  'GamesPlayedPVP',
+  'GamesPlayedPVE',
+  'GamesPlayedCustomGame',
+  'GamesPlayedPrivateMatch',
+  'TimePlayedTotal',
+  'TimePlayedPVP',
+  'Playtime',
+  'Reputation',
+  'MatchesWonwithanyHero.T_Win.1',
+  'MetaGameManualDeployCount',
+  'CampaignProgression',
+  'CampaignLastMissionCompleted',
+]);
+
+/**
+ * The family a key belongs to, and the key whose value decides which space
+ * recorded more of that family. Returns null for a standalone key.
+ */
+function familyOf(key: string): { family: string; sizedBy: string } | null {
+  let match = /^MatchesPlayedpergamemode\.S_Type\.(.+)$/.exec(key);
+  if (match) return { family: `mode:${match[1]}`, sizedBy: key };
+  match = /^MatchesWonpergamemode\.T_Win\.1\.S_Type\.(.+)$/.exec(key);
+  if (match) {
+    return {
+      family: `mode:${match[1]}`,
+      sizedBy: `MatchesPlayedpergamemode.S_Type.${match[1]}`,
+    };
+  }
+  match = /^MatchesPlayedperHero\.Hero\.Hero_(.+)$/.exec(key);
+  if (match) return { family: `hero-matches:${match[1]}`, sizedBy: key };
+  match = /^Hero(.+?)(Level|Reputation|TimePlayed)$/.exec(key);
+  if (match) return { family: `hero:${match[1]}`, sizedBy: `Hero${match[1]}TimePlayed` };
+  return null;
+}
+
+function value(entry: RawStat | undefined): number | null {
+  if (!entry || entry.value === undefined || entry.value === null || entry.value === '') return null;
+  const n = Number(entry.value);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function mergeSpaceStats(snapshots: RawStats[]): RawStats {
   const [freshest, ...rest] = snapshots;
   if (!freshest) return {};
   const merged: RawStats = { ...freshest };
+
+  // Which snapshot recorded most of each family, freshest winning a tie.
+  const bestForFamily = new Map<string, RawStats>();
+  for (const snapshot of snapshots) {
+    for (const key of Object.keys(snapshot)) {
+      const grouping = familyOf(key);
+      if (!grouping) continue;
+      const size = value(snapshot[grouping.sizedBy]);
+      if (size === null) continue;
+      const incumbent = bestForFamily.get(grouping.family);
+      const incumbentSize = incumbent ? value(incumbent[grouping.sizedBy]) : null;
+      if (incumbentSize === null || size > incumbentSize) {
+        bestForFamily.set(grouping.family, snapshot);
+      }
+    }
+  }
+
   for (const older of rest) {
     for (const [key, entry] of Object.entries(older)) {
-      if (!(key in merged)) merged[key] = entry;
+      if (!(key in merged)) {
+        merged[key] = entry;
+        continue;
+      }
+      const grouping = familyOf(key);
+      if (grouping) {
+        // Take the whole family from the one space that recorded most of it.
+        if (bestForFamily.get(grouping.family) === older) merged[key] = entry;
+        continue;
+      }
+      if (!CUMULATIVE_KEYS.has(key)) continue;
+      const mine = value(entry);
+      const theirs = value(merged[key]);
+      if (mine !== null && (theirs === null || mine > theirs)) merged[key] = entry;
     }
   }
   return merged;
@@ -440,7 +536,14 @@ export function mapForHonorStats(
   const timeTotal = num(take('TimePlayedTotal'));
   const timePvp = num(take('TimePlayedPVP'));
   take('Playtime'); // Alternate playtime key; TimePlayedTotal is the one shown.
-  const campaignProgress = num(take('CampaignProgression'));
+  // CampaignProgression is a 0-1 fraction, not a percentage already: an
+  // account whose story the game reports as "STORY PROGRESSION 100.00%"
+  // returns exactly 1 here, which the page printed as "1%". Scaled to a
+  // percentage so a finished campaign reads as finished. Clamped because a
+  // fraction is all this key has ever been observed to hold.
+  const campaignRaw = num(take('CampaignProgression'));
+  const campaignProgress =
+    campaignRaw === null ? null : Math.round(Math.min(1, Math.max(0, campaignRaw)) * 1000) / 10;
   const campaignMission = num(take('CampaignLastMissionCompleted'));
 
   // Matchmaking rating (TrueSkill); Mu is the rating, Sigma the uncertainty.
