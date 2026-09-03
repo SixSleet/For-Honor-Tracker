@@ -812,6 +812,23 @@ test('spaces are merged family by family, so a ratio never crosses records', () 
   assert.equal(merged['MatchesPlayedperHero.Hero.Hero_Warmonger'].value, '575');
 });
 
+test('the opaque last-mission id is never shown as a mission number', () => {
+  // Measured on two accounts the game reports as 100% story complete: one
+  // returns 0, the other 1,280,394,179. Two players who both finished the
+  // story would hold the same value if this were an ordinal, so it is an
+  // identifier, and a ten-digit "Last mission" is worse than an honest gap.
+  const mission = (stats: RawStats) =>
+    mapForHonorStats(stats).overview.find((stat) => stat.key === 'campaign-mission')?.value;
+
+  assert.equal(mission({ CampaignLastMissionCompleted: s(1280394179) }), null);
+  assert.equal(mission({ CampaignLastMissionCompleted: s(0) }), null);
+  assert.equal(mission({ CampaignLastMissionCompleted: s(7) }), null);
+  assert.equal(mission({}), null);
+
+  // Still consumed, so it is not double-counted as an undecoded key.
+  assert.equal(mapForHonorStats({ CampaignLastMissionCompleted: s(1280394179) }).undecoded, 0);
+});
+
 test('the story campaign is a fraction, not a percentage already', () => {
   // In game this account reads "STORY PROGRESSION 100.00%"; Ubisoft returns 1.
   const done = mapForHonorStats({ CampaignProgression: s(1) });

@@ -568,7 +568,9 @@ export function mapForHonorStats(
   const campaignRaw = num(take('CampaignProgression'));
   const campaignProgress =
     campaignRaw === null ? null : Math.round(Math.min(1, Math.max(0, campaignRaw)) * 1000) / 10;
-  const campaignMission = num(take('CampaignLastMissionCompleted'));
+  // Consumed so it is not counted as an undecoded key: it is decoded, and the
+  // conclusion is that it is not showable. See the overview entry below.
+  take('CampaignLastMissionCompleted');
 
   // Matchmaking rating (TrueSkill); Mu is the rating, Sigma the uncertainty.
   // TrueSkill initialises every player at mu = 25, so a mu of exactly 25 means
@@ -697,17 +699,23 @@ export function mapForHonorStats(
       note: 'As Ubisoft records it',
     },
     {
-      // Ubisoft's key is CampaignLastMissionCompleted — the index of the last
-      // mission finished, not a count of missions finished.
+      // CampaignLastMissionCompleted is not a mission number, whatever its
+      // name suggests, so there is nothing here a reader could act on.
       //
-      // Zero is not mission zero, it is "never written": an account whose
-      // story the game reports as 100% complete still returns 0 here, so the
-      // row said "Last mission 0" directly under "Completion 100%". Dropped
-      // rather than printed, the same as any other figure the source does not
-      // actually hold.
+      // Measured on two accounts the game reports as 100% story complete: one
+      // returns 0, the other 1,280,394,179 (0x4C5143C3). Two players who have
+      // both finished the story would hold the same value if this were an
+      // ordinal or an index, and a ten-digit one is not a mission either way.
+      // It reads like an opaque content identifier.
+      //
+      // So the row is dropped rather than printed under a label it does not
+      // deserve: "Last mission 1,280,394,179" sitting under "Completion 100%"
+      // is worse than an honest gap. Ubisoft exposes no mission dictionary to
+      // resolve the id against — a stat-name sweep found none — so decoding it
+      // would mean inventing the answer.
       key: 'campaign-mission',
       label: 'Last mission',
-      value: campaignMission === 0 ? null : campaignMission,
+      value: null,
       kind: 'number',
     },
   ];
