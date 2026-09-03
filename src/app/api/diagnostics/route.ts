@@ -88,6 +88,19 @@ export async function GET(request: Request) {
     } catch (error) {
       statProbe = { error: error instanceof Error ? error.message : String(error) };
     }
+    // Surface the probe's own requests. Without them a rejected request — too
+    // many names in one query, say — is indistinguishable from every name
+    // being absent, which is the one mistake a probe must not invite.
+    statProbe = {
+      ...(statProbe as Record<string, unknown>),
+      requests: probeTrace.traces.map((entry) => ({
+        label: entry.label,
+        status: entry.status,
+        ok: entry.ok,
+        error: entry.error ?? null,
+        responseSnippet: entry.responseSnippet?.slice(0, 400) ?? '',
+      })),
+    };
   }
 
   return NextResponse.json(
