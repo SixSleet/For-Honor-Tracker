@@ -5,7 +5,7 @@
   "description": "A free, honest For Honor player tracker. Username in, real data or a clear explanation out.",
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node scripts/ranked-history-probe.mjs && node scripts/playlist-rank-probe.mjs && node scripts/game-app-contract-probe.mjs && node scripts/ranked-playlist-object-probe.mjs",
+    "prebuild": "node scripts/ranked-history-probe.mjs && node scripts/playlist-rank-probe.mjs && node scripts/game-app-contract-probe.mjs && node scripts/ranked-playlist-object-probe.mjs && node scripts/ranked-parameter-groups-probe.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
