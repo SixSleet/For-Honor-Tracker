@@ -18,6 +18,30 @@ import { heroIdentity } from '../../shared/hero-roster.ts';
  * Nothing here is invented. Every value shown is a value Ubisoft returned;
  * unknown hero codenames are rendered from the codename itself rather than
  * guessed at, and stats the API does not return are simply absent.
+ *
+ * The default set is the whole set. /v1/profiles/stats also accepts an
+ * explicit `statNames` list, which raised the obvious question of whether it
+ * holds stats it does not volunteer. It does not: roughly 105 candidate names
+ * were asked for directly (via /api/diagnostics?probeStats=), every batch
+ * carrying a known-good control, and not one returned a value. Confirmed
+ * absent rather than merely unmapped:
+ *
+ *   - per-hero wins, losses, kills, deaths and assists, under every spelling
+ *     the faceted key convention allows — the game's own Heroes Performance
+ *     panel shows these, so it reads them from somewhere else entirely;
+ *   - every game mode except Duel (DL) and Dominion (DMN). Brawl, Breach,
+ *     Skirmish, Elimination, Tribute, Arcade and Ranked Duel were tried in
+ *     both short and long code forms;
+ *   - the Ranked Duel rank, and any ranked rating, tier, division or points;
+ *   - player level, gear score, XP, prestige, steel, salvage and orders;
+ *   - per-mode time played, kills and deaths;
+ *   - individual combat counters (parries, guard breaks, throws, executions,
+ *     ledge and environmental kills, revenge activations, round records).
+ *
+ * The account also owns 32 Ubisoft spaces, and exactly two carry For Honor's
+ * application id — both are already read, so there is no third space holding
+ * the remainder. What this file maps is therefore everything the public API
+ * has to give; anything still missing is missing upstream.
  */
 
 /**
