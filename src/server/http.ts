@@ -5,6 +5,19 @@ import { maskUrl, redactBody } from './redact';
 const USER_AGENT =
   'ForHonorTracker/0.1 (+https://github.com/SixSleet/For-Honor-Tracker) open-source stats viewer';
 
+/**
+ * How much of an upstream response body a trace keeps.
+ *
+ * Traces are only ever surfaced through /api/diagnostics, which is operator
+ * token-gated, and every body passes through the redactor first. The old
+ * 1,200-character cut-off truncated Ubisoft's stats payload after a couple of
+ * dozen keys, which is precisely the part worth reading: the account returns
+ * hundreds of stat keys, and the ones this project has not decoded yet are the
+ * whole reason to look at a trace at all. Generous enough to hold the full
+ * payload, still bounded so a pathological response cannot blow up the route.
+ */
+const TRACE_SNIPPET_LIMIT = 100_000;
+
 export interface TracedResponse {
   status: number;
   ok: boolean;
@@ -66,7 +79,7 @@ export async function tracedFetch(
       status: response.status,
       ok: response.ok,
       durationMs: Date.now() - startedAt,
-      responseSnippet: redactBody(text),
+      responseSnippet: redactBody(text, TRACE_SNIPPET_LIMIT),
     });
     return { status: response.status, ok: response.ok, text, headers: response.headers };
   } catch (error) {
