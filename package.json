@@ -5,6 +5,7 @@
   "description": "A free, honest For Honor player tracker. Username in, real data or a clear explanation out.",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/follow-claude-ranked-endpoints.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
