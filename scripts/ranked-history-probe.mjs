@@ -6,6 +6,7 @@
 
 const BRANCH = 'chatgpt-ranked-history-research';
 const UBI = 'https://public-ubiservices.ubi.com';
+const API_UBI = 'https://api-ubiservices.ubi.com';
 const FH_SPACE = 'c2294cd6-bd01-4f19-81e9-4e5d32cb763a';
 const LEGACY_SPACE = '882ad5b5-f549-44a1-a434-c465d22fe4bf';
 const DEFAULT_APP_ID = 'f35adcb5-1911-440c-b1c9-48fdc1701c68';
@@ -61,6 +62,22 @@ function leaderboardIds(body) {
   return [...out].slice(0, 5);
 }
 
+function applicationIds(body) {
+  const out = new Set();
+  function walk(v) {
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v)) return v.forEach(walk);
+    for (const [k, x] of Object.entries(v)) {
+      const n = k.replace(/[_-]/g, '').toLowerCase();
+      if ((n === 'applicationid' || n === 'appid') && typeof x === 'string'
+          && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)) out.add(x);
+      walk(x);
+    }
+  }
+  walk(body);
+  return [...out].slice(0, 12);
+}
+
 function interestingConfig(body) {
   const entries = [];
   const urls = [];
@@ -69,15 +86,15 @@ function interestingConfig(body) {
     if (Array.isArray(v)) return v.slice(0, 100).forEach((x) => walk(x, `${path}[]`));
     for (const [k, x] of Object.entries(v)) {
       const p = path ? `${path}.${k}` : k;
-      if (/(rank|leader|match|skill)/i.test(p) && ['string','number','boolean'].includes(typeof x))
+      if (/(rank|leader|match|skill|hn_)/i.test(p) && ['string','number','boolean'].includes(typeof x))
         entries.push(`${p}=${clean(x)}`);
-      if (typeof x === 'string' && /^https?:\/\//i.test(x) && /(rank|leader|match|skill)/i.test(p + x))
+      if (typeof x === 'string' && /^https?:\/\//i.test(x) && /(rank|leader|match|skill|hn_)/i.test(p + x))
         urls.push({ key: p, url: x });
       walk(x, p);
     }
   }
   walk(body);
-  return { entries: entries.slice(0, 120), urls: urls.slice(0, 20) };
+  return { entries: entries.slice(0, 160), urls: urls.slice(0, 30) };
 }
 
 async function storedSession() {
@@ -119,6 +136,15 @@ async function probe(label, url, headers) {
   }
 }
 
+async function inspectConfig(label, result, exact) {
+  if (!result?.ok) return;
+  try {
+    const q = interestingConfig(JSON.parse(result.text));
+    if (q.entries.length) log(`${label}: interesting=${q.entries.join('|')}`);
+    exact.push(...q.urls);
+  } catch {}
+}
+
 async function main() {
   if (process.env.VERCEL && process.env.VERCEL_GIT_COMMIT_REF !== BRANCH) {
     log('skipped: not research branch'); return;
@@ -135,20 +161,66 @@ async function main() {
   };
 
   const groups = encodeURIComponent('us-sdkClientFeaturesSwitches,us-sdkClientUrls');
+  const exact = [];
+
+  // Current web-client application config: useful as a control.
   const configUrls = [
     `${UBI}/v1/applications/${encodeURIComponent(appId)}/parameters?parameterGroups=${groups}`,
     `${UBI}/v1/applications/${encodeURIComponent(appId)}/parameters?spaceId=${FH_SPACE}&sandbox=HERO_PC_LNCH_A&parameterGroups=${groups}`,
     `${UBI}/v1/applications/${encodeURIComponent(appId)}/parameters?spaceId=${FH_SPACE}&sandbox=HERO_PC_LNCH_A`,
+    `${UBI}/v1/applications/${encodeURIComponent(appId)}/configuration`,
   ];
-  const exact = [];
   for (let i=0; i<configUrls.length; i++) {
-    const x = await probe(`config-${i+1}`, configUrls[i], headers);
+    const x = await probe(`app-config-${i+1}`, configUrls[i], headers);
+    await inspectConfig(`app-config-${i+1}`, x, exact);
+  }
+
+  // Space configuration can advertise title-specific service groups even when
+  // the web-client application config is intentionally minimal.
+  const spaceUrls = [
+    `${UBI}/v1/spaces/${FH_SPACE}/parameters?parameterGroups=${groups}`,
+    `${UBI}/v1/spaces/${FH_SPACE}/parameters`,
+    `${UBI}/v1/spaces/${LEGACY_SPACE}/parameters?parameterGroups=${groups}`,
+    `${UBI}/v1/spaces/${LEGACY_SPACE}/parameters`,
+  ];
+  for (let i=0; i<spaceUrls.length; i++) {
+    const x = await probe(`space-config-${i+1}`, spaceUrls[i], headers);
+    await inspectConfig(`space-config-${i+1}`, x, exact);
+  }
+
+  // Public application metadata lookup observed in Ubisoft Connect clients.
+  // We only print application UUIDs returned for the already-public For Honor
+  // space IDs; no profile/account metadata is logged.
+  const appLookups = [
+    `${API_UBI}/v2/applications?spaceIds=${FH_SPACE}`,
+    `${API_UBI}/v2/applications?spaceIds=${LEGACY_SPACE}`,
+    `${UBI}/v1/applications?spaceIds=${FH_SPACE}`,
+    `${UBI}/v1/applications?spaceId=${FH_SPACE}`,
+  ];
+  const discoveredApps = new Set();
+  for (let i=0; i<appLookups.length; i++) {
+    const x = await probe(`application-metadata-${i+1}`, appLookups[i], headers);
     if (!x?.ok) continue;
     try {
-      const q = interestingConfig(JSON.parse(x.text));
-      if (q.entries.length) log(`config-${i+1}: interesting=${q.entries.join('|')}`);
-      exact.push(...q.urls);
+      const ids = applicationIds(JSON.parse(x.text));
+      ids.forEach((id) => discoveredApps.add(id));
+      log(`application-metadata-${i+1}: application_ids=${ids.join(',') || '-'}`);
     } catch {}
+  }
+
+  // Inspect only public application configuration for IDs explicitly returned
+  // by the known For Honor space metadata lookup.
+  let appNo = 0;
+  for (const candidate of [...discoveredApps].slice(0, 8)) {
+    appNo++;
+    const h = { ...headers, 'Ubi-AppId': candidate };
+    for (const [suffix, url] of [
+      ['parameters', `${UBI}/v1/applications/${candidate}/parameters?spaceId=${FH_SPACE}&sandbox=HERO_PC_LNCH_A`],
+      ['configuration', `${UBI}/v1/applications/${candidate}/configuration`],
+    ]) {
+      const x = await probe(`discovered-app-${appNo}-${suffix}`, url, h);
+      await inspectConfig(`discovered-app-${appNo}-${suffix}`, x, exact);
+    }
   }
 
   const boards = await probe('leaderboard-space-collection', `${UBI}/v1/spaces/${FH_SPACE}/leaderboards?offset=0&limit=20`, headers);
@@ -173,7 +245,7 @@ async function main() {
   const seen = new Set();
   const usable = exact.filter((x) => x.url && !x.url.includes('{') && /^https:\/\//i.test(x.url) && !seen.has(x.url) && seen.add(x.url));
   log(`config: exact_interesting_service_urls=${usable.length}`);
-  for (let i=0; i<Math.min(usable.length,12); i++) await probe(`config-service-${i+1}-${clean(usable[i].key)}`, usable[i].url, headers);
+  for (let i=0; i<Math.min(usable.length,16); i++) await probe(`config-service-${i+1}-${clean(usable[i].key)}`, usable[i].url, headers);
   log('end probe');
 }
 
