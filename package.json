@@ -4,6 +4,7 @@
   "private": true,
   "description": "A free, honest For Honor player tracker. Username in, real data or a clear explanation out.",
   "scripts": {
+    "prebuild": "node scripts/probe-game2web-routes.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
