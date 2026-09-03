@@ -701,6 +701,14 @@ async function probeStatNames(
  *   - {profileId} and {spaceId} are substituted rather than free-typed;
  *   - responses come back through the same redactor as every other trace.
  */
+/**
+ * How much of a probed response to keep. Same value, and the same reasoning,
+ * as the trace limit in http.ts: bounded so a pathological response cannot
+ * blow up the route, generous enough that a list endpoint can be read whole
+ * rather than judged from its first three records.
+ */
+const PROBE_SNIPPET_LIMIT = 100_000;
+
 async function probePaths(
   profileId: string,
   paths: string[],
@@ -737,7 +745,13 @@ async function probePaths(
         // Redacted like every other trace body. 300 characters was too short
         // to read a response worth discovering, and an unredacted snippet
         // would have been a hole in exactly the claim this probe makes.
-        snippet: redactBody(response.text, 4000),
+        //
+        // The limit matches the trace limit for the same reason: a truncated
+        // body from an undocumented route is the one thing that cannot be
+        // decoded. Reading only the first few records of a list endpoint made
+        // two different players' responses look identical when the question
+        // being asked was precisely whether they differ.
+        snippet: redactBody(response.text, PROBE_SNIPPET_LIMIT),
       });
     } catch (error) {
       results.push({
