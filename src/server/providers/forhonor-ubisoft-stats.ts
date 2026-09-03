@@ -556,12 +556,21 @@ export function mapForHonorStats(
   const skillRating = (raw: number | null): number | null =>
     raw === null || raw === TRUESKILL_DEFAULT_MU ? null : Math.round(raw);
 
+  // Sigma is how unsure Ubisoft still is about the rating beside it: TrueSkill
+  // starts every player at a wide 8.0 and narrows it as it sees more matches,
+  // so a small sigma means the rating has been earned over many games rather
+  // than guessed from a handful. It was read and discarded; reported now as
+  // the rating's margin, which is the difference between "rated 47" and
+  // "rated 47, and confident about it".
+  const uncertainty = (raw: number | null): string | undefined =>
+    raw === null ? undefined : `± ${Math.round(raw * 10) / 10} margin`;
+
   const duelSkill = skillRating(num(take('SkillRatingDuelMu')));
-  take('SkillRatingDuelSigma');
+  const duelSigma = uncertainty(num(take('SkillRatingDuelSigma')));
   const killSkill = skillRating(num(take('SkillRatingKillMu')));
-  take('SkillRatingKillSigma');
+  const killSigma = uncertainty(num(take('SkillRatingKillSigma')));
   const objectiveSkill = skillRating(num(take('SkillRatingObjectiveMu')));
-  take('SkillRatingObjectiveSigma');
+  const objectiveSigma = uncertainty(num(take('SkillRatingObjectiveSigma')));
 
   // The season this snapshot came from. Ubisoft's stats service can lag well
   // behind live play, so this is surfaced rather than hidden.
@@ -888,9 +897,9 @@ export function mapForHonorStats(
     'matchmaking',
     'Matchmaking ratings',
     [
-      { key: 'duel-skill', label: 'Duel', value: duelSkill, kind: 'number' },
-      { key: 'kill-skill', label: 'Kills', value: killSkill, kind: 'number' },
-      { key: 'objective-skill', label: 'Objectives', value: objectiveSkill, kind: 'number' },
+      { key: 'duel-skill', label: 'Duel', value: duelSkill, kind: 'number', ...(duelSkill !== null && duelSigma ? { note: duelSigma } : {}) },
+      { key: 'kill-skill', label: 'Kills', value: killSkill, kind: 'number', ...(killSkill !== null && killSigma ? { note: killSigma } : {}) },
+      { key: 'objective-skill', label: 'Objectives', value: objectiveSkill, kind: 'number', ...(objectiveSkill !== null && objectiveSigma ? { note: objectiveSigma } : {}) },
     ],
     'What Ubisoft matches you on internally. It is not the Ranked Duel rank shown in game, and a player who has never been rated in a category simply has no number here.',
   );
