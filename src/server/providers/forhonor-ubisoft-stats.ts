@@ -75,6 +75,29 @@ import { formatDate } from '../../shared/format.ts';
  *   - badges, wallets, friends, clubs, units, progressions, playtime, titles,
  *     status, presence (profile-scoped) and products, configuration
  *     (space-scoped) are all 404 — routes that do not exist here for this game.
+ *
+ * Guessing candidate paths is no longer necessary: Ubisoft publishes its own
+ * catalogue. GET /v1/spaces/<space>/parameters returns the live client
+ * configuration, and its `us-sdkClientUrls` group is 200 URL templates — 86 of
+ * them profile-scoped — naming every service the game client can call. Working
+ * through the ones that could carry player data settles the two absences this
+ * report has to explain, and neither is a missing endpoint:
+ *
+ *   - profiles/{profileId}/matches EXISTS and is live. It answers 401
+ *     errorCode 1510, "The given profileId does not match the ticket": match
+ *     history is served only to the account doing the asking. It is private,
+ *     not decommissioned, and a tracker cannot read it for a searched player.
+ *   - profiles/{profileId}/playerAchievements likewise exists and answers 403
+ *     errorCode 4, "The provided profileId must belong to the user's ticket".
+ *     So Ubisoft does hold achievements and will not release another player's;
+ *     Steam is genuinely the only readable source for them.
+ *
+ * Both are authorisation boundaries Ubisoft has drawn deliberately, and this
+ * project does not attempt to get around either. The rest of the catalogue is
+ * empty or unused for this game: progressiongraphs returns [] in both spaces,
+ * battlepasses/seasons answers "There is no season configured", and
+ * profiles/{profileId}/stats?spaceId= is simply a second route to the same
+ * dictionary already read.
  */
 
 /**

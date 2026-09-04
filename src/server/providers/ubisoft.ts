@@ -1033,8 +1033,17 @@ export const ubisoftProvider: DataProvider = {
       },
       matches: {
         availability: 'dead',
+        // Corrected on evidence. The old claim was that no replacement endpoint
+        // existed; one does. Ubisoft's SDK URL catalogue (readable at
+        // /v1/spaces/{spaceId}/parameters, under us-sdkClientUrls) names
+        // profiles/{profileId}/matches, and that route is live — it answers
+        // 401 errorCode 1510, "The given profileId does not match the ticket."
+        // So match history is not gone, it is private: the service returns it
+        // only to the account whose own session is asking. A tracker that
+        // looks up other players cannot read it for them, and this project
+        // will not try to get around an authorisation boundary to do so.
         explanation:
-          'The official For Honor match-history site (game-forhonor.ubisoft.com) has been decommissioned. No replacement endpoint was found.',
+          'Ubisoft does keep per-match history, but it only serves it to the account that is signed in — asking for another player’s returns "the given profileId does not match the ticket". So no tracker can show it for the player you searched. The older game-forhonor.ubisoft.com site that used to show it publicly is gone.',
         items: [],
       },
       achievements: {
@@ -1045,7 +1054,13 @@ export const ubisoftProvider: DataProvider = {
             ? achievements?.privacyState && achievements.privacyState !== 'public'
               ? 'This account has a Steam profile linked, but Steam reports its game details as not public, so achievements are hidden. Only the player can change that.'
               : 'This account has a Steam profile linked, but no For Honor achievements could be read from it.'
-            : 'Ubisoft publishes no achievement data for For Honor, and this account has no Steam profile linked to read them from.',
+            // Ubisoft does hold achievements — profiles/{profileId}/playerAchievements
+            // is live — but it answers 403 errorCode 4, "The provided profileId
+            // must belong to the user's ticket", for anyone but the signed-in
+            // account. So it can never serve a searched player, and Steam is
+            // genuinely the only readable source. Said plainly rather than
+            // claiming Ubisoft has no such data.
+            : 'Ubisoft keeps achievements private to the signed-in account, so they cannot be read for a player you searched. Steam publishes them for public profiles, and this account has no Steam profile linked.',
         items: achievements?.items ?? [],
         unlockedCount: achievements?.unlockedCount ?? 0,
         totalCount: achievements?.totalCount ?? 0,
