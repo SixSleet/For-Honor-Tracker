@@ -237,6 +237,7 @@ test('story difficulty prefers the hardest cleared', () => {
 // --- Ubisoft For Honor stat mapping ----------------------------------------
 
 import {
+  aggregatePlayHistory,
   heroFactsFromStatCard,
   mapForHonorStats,
   mergeSpaceStats,
@@ -737,6 +738,43 @@ test('last played is the newest stat change, and no start date is inferred', () 
   // Nothing usable in, nothing invented out.
   assert.equal(lastPlayedFromStatCard([]), null);
   assert.equal(lastPlayedFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), null);
+});
+
+test('play history folds sessions across SKUs: sum count, earliest first, latest last', () => {
+  // The real shape returned for a crossplay PlayStation player: two For Honor
+  // application ids, each with its own stored first/last session and count.
+  const history = aggregatePlayHistory([
+    {
+      firstSessionDate: '2025-09-11T14:50:03.037Z',
+      lastSessionDate: '2026-09-03T18:14:42.903Z',
+      sessionsCount: 1000,
+    },
+    {
+      firstSessionDate: '2026-03-11T18:32:33.103Z',
+      lastSessionDate: '2026-03-12T01:24:26.401Z',
+      sessionsCount: 2,
+    },
+  ]);
+  assert.equal(history.sessions, 1002);
+  assert.equal(history.firstSessionAt, Date.parse('2025-09-11T14:50:03.037Z'));
+  assert.equal(history.lastSessionAt, Date.parse('2026-09-03T18:14:42.903Z'));
+});
+
+test('play history reports nothing rather than a zero when there is nothing to report', () => {
+  const empty = aggregatePlayHistory([]);
+  assert.equal(empty.sessions, null);
+  assert.equal(empty.firstSessionAt, null);
+  assert.equal(empty.lastSessionAt, null);
+
+  // A record with only a count still yields a count, and null dates — never a
+  // date parsed from an empty string, which is the mistake that would put
+  // "Jan 1970" on the page.
+  const partial = aggregatePlayHistory([
+    { firstSessionDate: '', lastSessionDate: null, sessionsCount: 5 },
+  ]);
+  assert.equal(partial.sessions, 5);
+  assert.equal(partial.firstSessionAt, null);
+  assert.equal(partial.lastSessionAt, null);
 });
 
 test('the reputation rail is drawn against the game cap, not the best hero', () => {

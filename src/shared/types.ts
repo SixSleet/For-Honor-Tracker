@@ -166,6 +166,13 @@ export interface PlayerReport {
   notices: string[];
   /** When they last played, epoch ms, when the source says. */
   lastPlayedAt?: number | null;
+  /**
+   * The earliest For Honor session the source has on record, epoch ms. Real
+   * and per-player, but "on record" rather than "first ever": for an account
+   * that predates the session service it can be later than the true first
+   * match, so it must not be labelled as a start date.
+   */
+  firstSessionAt?: number | null;
   /** The platforms this account plays on, and what it is called on each. */
   platforms?: PlatformLink[];
   /** The game season the source's snapshot was last written in. */

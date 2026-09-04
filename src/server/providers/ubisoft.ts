@@ -10,6 +10,7 @@ import { parseJson, tracedFetch, type TraceCollector } from '../http';
 import { redactBody } from '../redact';
 import { readSession, writeSession } from '../ubisoft-session-store';
 import {
+  aggregatePlayHistory,
   FOR_HONOR_SPACE_IDS,
   heroFactsFromStatCard,
   mapForHonorStats,
@@ -17,6 +18,8 @@ import {
   platformProfiles,
   lastPlayedFromStatCard,
   type PlatformProfiles,
+  type PlayHistory,
+  type PlayHistoryApplication,
   type RawPlatformProfile,
   type RawStats,
   type StatCardEntry,
@@ -466,41 +469,39 @@ async function discoverForHonorSpaceIds(
 }
 
 /**
- * How many separate sessions the player has launched For Honor for.
+ * A player's For Honor play history: sessions launched, and the first and last
+ * of them Ubisoft has on record.
  *
- * `gamesplayed` returns nulls for every play-history field, but the same
- * numbers are populated on `/v2/profiles/{id}/applications` when it is asked
- * for specific application ids. That is where the session count lives — a
- * figure nothing else on the page carries, and the one that makes average
- * session length computable.
+ * `gamesplayed` returns nulls for every play-history field, but the same record
+ * is populated on `/v3/profiles/{id}/applications` when it is asked for
+ * specific application ids. v3 carries three real per-player figures the rest
+ * of the page cannot get anywhere else — the session count (which makes average
+ * session length computable), and stable first/last session dates. It is asked
+ * for every For Honor application id the account owns, because those are
+ * per-platform SKU and a player's history is spread across them;
+ * aggregatePlayHistory folds them into one. (v2 carries the same session count
+ * but stamps both dates with the read time, so it is not used.)
  */
-async function fetchSessionCount(
+async function fetchPlayHistory(
   current: Session,
   profileId: string,
   applicationIds: string[],
   trace: TraceCollector,
-): Promise<number | null> {
-  if (applicationIds.length === 0) return null;
+): Promise<PlayHistory> {
+  const empty: PlayHistory = { sessions: null, firstSessionAt: null, lastSessionAt: null };
+  if (applicationIds.length === 0) return empty;
   const response = await tracedFetch(
     {
       provider: info.id,
-      label: 'Play history (GET /v2/profiles/{id}/applications)',
-      url: `${UBI_SERVICES}/v2/profiles/${encodeURIComponent(profileId)}/applications?applicationIds=${applicationIds.map(encodeURIComponent).join(',')}`,
+      label: 'Play history (GET /v3/profiles/{id}/applications)',
+      url: `${UBI_SERVICES}/v3/profiles/${encodeURIComponent(profileId)}/applications?applicationIds=${applicationIds.map(encodeURIComponent).join(',')}`,
       headers: authHeaders(current),
     },
     trace,
   );
-  if (!response.ok) return null;
-  const body = parseJson<{ applications?: Array<{ sessionsPlayed?: number }> }>(response.text);
-  let total = 0;
-  let seen = false;
-  for (const application of body?.applications ?? []) {
-    if (typeof application.sessionsPlayed === 'number' && application.sessionsPlayed >= 0) {
-      total += application.sessionsPlayed;
-      seen = true;
-    }
-  }
-  return seen ? total : null;
+  if (!response.ok) return empty;
+  const body = parseJson<{ applications?: PlayHistoryApplication[] }>(response.text);
+  return aggregatePlayHistory(body?.applications ?? []);
 }
 
 /**
@@ -889,14 +890,16 @@ export const ubisoftProvider: DataProvider = {
     // Three more sources, all fetched together so they cost one round trip:
     // the stat card (Ubisoft's own hero names, and first/last played), the
     // platforms the account plays on, and whether an avatar exists.
-    const [statCard, platforms, avatarUrl, sessions] = await Promise.all([
+    const [statCard, platforms, avatarUrl, playHistory] = await Promise.all([
       freshest ? fetchStatsCard(current, identity.id, freshest.spaceId, trace) : Promise.resolve([] as StatCardEntry[]),
       fetchPlatforms(current, identity.id, trace),
       fetchAvatarUrl(identity.id),
-      fetchSessionCount(current, identity.id, applicationIds, trace),
+      fetchPlayHistory(current, identity.id, applicationIds, trace),
     ]);
     const heroFacts = heroFactsFromStatCard(statCard);
-    const lastPlayedAt = lastPlayedFromStatCard(statCard);
+    // The stat card's last-write time is the primary "last played"; the play
+    // history's last session covers a player whose card carries no timestamp.
+    const lastPlayedAt = lastPlayedFromStatCard(statCard) ?? playHistory.lastSessionAt;
 
     // Ubisoft has no achievement data of its own for For Honor, but it does
     // say which Steam account this one is linked to — and Steam publishes
@@ -915,7 +918,7 @@ export const ubisoftProvider: DataProvider = {
     // stats. Known hero codenames become in-game names; unknown ones are shown
     // readably from the codename, never guessed.
     const mapped = hasStats
-      ? mapForHonorStats(rawStats as RawStats, heroFacts, sessions)
+      ? mapForHonorStats(rawStats as RawStats, heroFacts, playHistory.sessions)
       : { season: null, overview: [], overall: [], heroes: [], gameModes: [], extraGroups: [], undecoded: 0 };
 
     // Ubisoft's stats service writes on its own schedule and can lag live
@@ -953,6 +956,7 @@ export const ubisoftProvider: DataProvider = {
       fetchedAt: Date.now(),
       cached: false,
       lastPlayedAt,
+      firstSessionAt: playHistory.firstSessionAt,
       platforms: platforms.links,
       season: mapped.season,
       overview: {

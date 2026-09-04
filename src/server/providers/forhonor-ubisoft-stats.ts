@@ -135,13 +135,13 @@ export function heroFactsFromStatCard(cards: StatCardEntry[]): Map<string, HeroC
 /**
  * When the player last played, from the latest change to any stat on the card.
  *
- * There is deliberately no "first played" counterpart. The card also carries a
- * `startDate` per stat, and it is tempting to read the earliest one as the day
- * the player started — but it is the date Ubisoft *defined the counter*, not
- * the date this account first played. It reads 2016-10-29 on every account,
- * which is before For Honor released in February 2017, so it cannot be anyone's
- * start date. Ubisoft exposes no per-account first-played timestamp, so the
- * report says nothing rather than repeating a constant as if it were personal.
+ * There is deliberately no "first played" counterpart here. The card also
+ * carries a `startDate` per stat, and it is tempting to read the earliest one
+ * as the day the player started — but it is the date Ubisoft *defined the
+ * counter*, not the date this account first played. It reads 2016-10-29 on
+ * every account, which is before For Honor released in February 2017, so it
+ * cannot be anyone's start date. A real per-player first-session date does
+ * exist, but on a different endpoint — see aggregatePlayHistory below.
  */
 export function lastPlayedFromStatCard(cards: StatCardEntry[]): number | null {
   let last: number | null = null;
@@ -150,6 +150,64 @@ export function lastPlayedFromStatCard(cards: StatCardEntry[]): number | null {
     if (modified !== null && (last === null || modified > last)) last = modified;
   }
   return last;
+}
+
+/** One application record from `/v3/profiles/{id}/applications`. */
+export interface PlayHistoryApplication {
+  firstSessionDate?: string | null;
+  lastSessionDate?: string | null;
+  sessionsCount?: number | null;
+}
+
+/** Play history folded across all of a player's For Honor application ids. */
+export interface PlayHistory {
+  /** Total times the game was launched, summed across platform SKUs. */
+  sessions: number | null;
+  /** Earliest session Ubisoft has on record, epoch ms. */
+  firstSessionAt: number | null;
+  /** Most recent session Ubisoft has on record, epoch ms. */
+  lastSessionAt: number | null;
+}
+
+/**
+ * Folds a player's application records into one play history.
+ *
+ * A player owns For Honor under one application id per platform SKU — a PC
+ * buyer and a crossplay PlayStation buyer carry different ids, and a
+ * long-tenured account can carry several as the game re-issued them. Each id's
+ * record is real and per-player (confirmed live: two players return different
+ * dates and counts, and re-querying the same player returns the same values,
+ * so these are stored figures, not a timestamp stamped at read time). They are
+ * combined the only way that is meaningful across SKUs: sessions add up, the
+ * first session is the earliest of any SKU, the last is the most recent.
+ *
+ * `firstSessionAt` is labelled "first session on record", not "first played":
+ * it is the earliest session Ubisoft's session service holds, which for an
+ * account that predates that service can be later than the true first match.
+ * It is still real, personal and varies per player — unlike the stat card's
+ * `startDate`, which is one pre-release constant for everyone — so it is worth
+ * showing for exactly what it is, and no more.
+ */
+export function aggregatePlayHistory(applications: PlayHistoryApplication[]): PlayHistory {
+  let sessions = 0;
+  let sessionsSeen = false;
+  let firstSessionAt: number | null = null;
+  let lastSessionAt: number | null = null;
+  for (const app of applications) {
+    if (
+      typeof app.sessionsCount === 'number' &&
+      Number.isFinite(app.sessionsCount) &&
+      app.sessionsCount >= 0
+    ) {
+      sessions += app.sessionsCount;
+      sessionsSeen = true;
+    }
+    const first = epoch(app.firstSessionDate);
+    if (first !== null) firstSessionAt = firstSessionAt === null ? first : Math.min(firstSessionAt, first);
+    const last = epoch(app.lastSessionDate);
+    if (last !== null) lastSessionAt = lastSessionAt === null ? last : Math.max(lastSessionAt, last);
+  }
+  return { sessions: sessionsSeen ? sessions : null, firstSessionAt, lastSessionAt };
 }
 
 /** The raw stat entry shape Ubisoft returns. */
