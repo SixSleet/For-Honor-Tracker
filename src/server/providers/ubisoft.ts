@@ -521,6 +521,11 @@ function snapshotFreshness(stats: RawStats | null): number {
   return read('MetaGameSeason') * 1_000_000 + read('Reputation');
 }
 
+// Stays on v1: /v2/profiles/stats answers 200 but returns the same 186 keys
+// in a different envelope with the periodic-stat fields unused for this game,
+// and /v3 is a 404. gamesplayed and statscard are v1-only likewise (v2/v3 both
+// 404). Every data endpoint was version-swept; applications was the only one a
+// newer version improved — see fetchPlayHistory.
 async function fetchProfileStats(
   current: Session,
   profileId: string,
@@ -584,6 +589,11 @@ async function fetchStatsCard(
  * The platforms an account plays on, from the profiles that share its userId.
  * The reading of that response — which handles are shown and which are not —
  * lives in the pure mapper beside this one, where it is tested directly.
+ *
+ * Stays on v2 deliberately: /v3/profiles?userId= answers 200 but returns the
+ * identical field set and the identical profiles (checked live), so there is
+ * nothing to gain, and v4 is a 404. The one endpoint where a higher version
+ * carried better data was applications — see fetchPlayHistory.
  */
 async function fetchPlatforms(
   current: Session,
