@@ -782,32 +782,30 @@ export function mapForHonorStats(
     { key: 'total-matches', label: 'Matches played', value: totalMatches, kind: 'number' },
     { key: 'playtime', label: 'Time played', value: toHours(timeTotal), kind: 'number', note: 'Hours' },
     {
+      // Named for what it measures. This group is a profile summary, not a
+      // campaign panel, so "Completion" alone would leave a reader asking
+      // completion of what.
       key: 'campaign',
-      label: 'Completion',
+      label: 'Story completion',
       value: campaignProgress,
       kind: 'percent',
       note: 'As Ubisoft records it',
     },
-    {
-      // CampaignLastMissionCompleted is not a mission number, whatever its
-      // name suggests, so there is nothing here a reader could act on.
-      //
-      // Measured on two accounts the game reports as 100% story complete: one
-      // returns 0, the other 1,280,394,179 (0x4C5143C3). Two players who have
-      // both finished the story would hold the same value if this were an
-      // ordinal or an index, and a ten-digit one is not a mission either way.
-      // It reads like an opaque content identifier.
-      //
-      // So the row is dropped rather than printed under a label it does not
-      // deserve: "Last mission 1,280,394,179" sitting under "Completion 100%"
-      // is worse than an honest gap. Ubisoft exposes no mission dictionary to
-      // resolve the id against — a stat-name sweep found none — so decoding it
-      // would mean inventing the answer.
-      key: 'campaign-mission',
-      label: 'Last mission',
-      value: null,
-      kind: 'number',
-    },
+    // There is deliberately no "Last mission" row.
+    //
+    // CampaignLastMissionCompleted is not a mission number, whatever its name
+    // suggests. Measured on two accounts the game reports as 100% story
+    // complete: one returns 0, the other 1,280,394,179 (0x4C5143C3). Two
+    // players who have both finished the story would hold the same value if
+    // this were an ordinal or an index, and a ten-digit one is not a mission
+    // either way. It reads like an opaque content identifier, and Ubisoft
+    // exposes no mission dictionary to resolve it against — a stat-name sweep
+    // found none — so decoding it would mean inventing the answer.
+    //
+    // It used to be emitted as a permanently null row, which rendered as an
+    // empty "Last mission" line on every player's page: all of the noise of a
+    // missing figure and none of the information. The key is still consumed
+    // above so it is not counted as undecoded.
   ];
 
   const overall: Stat[] = [
@@ -967,7 +965,18 @@ export function mapForHonorStats(
     { key: 'gt-pve', label: 'Versus AI', value: pve, kind: 'number' },
     { key: 'gt-custom', label: 'Custom', value: custom, kind: 'number' },
     { key: 'gt-private', label: 'Private', value: priv, kind: 'number' },
-    { key: 'wins', label: 'Matches won', value: wins, kind: 'number' },
+    {
+      // Scoped explicitly, because this number and the win rate under it do
+      // not share a denominator and a reader will otherwise try to divide one
+      // by the other. This is Ubisoft's lifetime win counter across every
+      // mode; the rate below is computed only from the modes Ubisoft breaks
+      // down (Duel and Dominion), which is why the wins behind it are fewer.
+      key: 'wins',
+      label: 'Matches won',
+      value: wins,
+      kind: 'number',
+      note: 'All modes, lifetime',
+    },
     {
       key: 'win-rate',
       label: 'Win rate',

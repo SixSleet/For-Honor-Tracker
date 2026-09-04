@@ -971,7 +971,11 @@ export const ubisoftProvider: DataProvider = {
       season: mapped.season,
       overview: {
         key: 'overview',
-        label: 'Story mode',
+        // Not "Story mode": this group is the profile summary — faction,
+        // lifetime reputation, matches, hours and the account name — of which
+        // story completion is one row. Naming the whole block after that one
+        // row told a reader the other five figures were campaign figures.
+        label: 'At a glance',
         availability: 'confirmed',
         explanation: undefined,
         stats: hasStats

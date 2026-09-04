@@ -667,7 +667,13 @@ test('win rate is computed from the per-mode counters, not from mismatched lifet
   assert.equal(winRate?.value, Math.round(((995 + 722) / (1367 + 928)) * 1000) / 10);
   assert.match(String(winRate?.note), /Dominion and Duel/);
   // The lifetime wins figure is still shown as its own count, just never as a rate.
-  assert.equal(matches?.stats.find((x) => x.key === 'wins')?.value, 1813);
+  const wins = matches?.stats.find((x) => x.key === 'wins');
+  assert.equal(wins?.value, 1813);
+  // And it says which population it counts. It sits directly above the win
+  // rate while deliberately not sharing a denominator with it — 1813 lifetime
+  // wins against 1717 across the two broken-down modes — so without a scope
+  // the two adjacent numbers read as a contradiction.
+  assert.match(String(wins?.note), /All modes/i);
 });
 
 test('with no per-mode counters there is no win rate, rather than a wrong one', () => {
@@ -855,13 +861,16 @@ test('the opaque last-mission id is never shown as a mission number', () => {
   // returns 0, the other 1,280,394,179. Two players who both finished the
   // story would hold the same value if this were an ordinal, so it is an
   // identifier, and a ten-digit "Last mission" is worse than an honest gap.
+  // No row at all, rather than a permanently empty one: an always-null "Last
+  // mission" line is all of the noise of a missing figure and none of the
+  // information.
   const mission = (stats: RawStats) =>
-    mapForHonorStats(stats).overview.find((stat) => stat.key === 'campaign-mission')?.value;
+    mapForHonorStats(stats).overview.find((stat) => stat.key === 'campaign-mission');
 
-  assert.equal(mission({ CampaignLastMissionCompleted: s(1280394179) }), null);
-  assert.equal(mission({ CampaignLastMissionCompleted: s(0) }), null);
-  assert.equal(mission({ CampaignLastMissionCompleted: s(7) }), null);
-  assert.equal(mission({}), null);
+  assert.equal(mission({ CampaignLastMissionCompleted: s(1280394179) }), undefined);
+  assert.equal(mission({ CampaignLastMissionCompleted: s(0) }), undefined);
+  assert.equal(mission({ CampaignLastMissionCompleted: s(7) }), undefined);
+  assert.equal(mission({}), undefined);
 
   // Still consumed, so it is not double-counted as an undecoded key.
   assert.equal(mapForHonorStats({ CampaignLastMissionCompleted: s(1280394179) }).undecoded, 0);
@@ -975,15 +984,16 @@ test('a merged rate always comes from one space, never half from each', () => {
 });
 
 test('the campaign figures are labelled for what Ubisoft actually stores', () => {
-  // CampaignLastMissionCompleted is the index of the last mission finished,
-  // not a count of missions finished, and it was labelled as the latter.
+  // The overview is a profile summary, of which story completion is one row,
+  // so that row has to name its own subject: "Completion" alone left a reader
+  // asking completion of what.
   const mapped = mapForHonorStats({
     CampaignProgression: s(1),
     CampaignLastMissionCompleted: s(0),
   });
   const labels = Object.fromEntries(mapped.overview.map((x) => [x.key, x.label]));
-  assert.equal(labels.campaign, 'Completion');
-  assert.equal(labels['campaign-mission'], 'Last mission');
+  assert.equal(labels.campaign, 'Story completion');
+  assert.equal(labels['campaign-mission'], undefined);
 });
 
 test('a section that needs explaining carries its explanation', () => {
