@@ -793,6 +793,52 @@ test('a figure recorded in the same ledger as its neighbour is left plainly stat
   );
 });
 
+test('a hero was last played when their time moved, not when they last prestiged', () => {
+  // Real values for Benkei on a live profile. The stat card dates the hero by
+  // when their reputation last changed, which is a level cycle apart from
+  // playing them: the card said 2025-12-08 while the played-time counter had
+  // moved on 2026-08-30. Measured across that profile, 38 of 39 heroes
+  // disagreed and the reputation date was the older every time, so the page
+  // was calling heroes in regular use untouched for months.
+  const card = [
+    {
+      statName: 'HeroBenkeiReputation',
+      displayName: 'Benkei Reputation',
+      lastModified: '2025-12-08T12:34:21.181Z',
+    },
+  ];
+  const mapped = mapForHonorStats(
+    {
+      HeroBenkeiReputation: { value: '13', lastModified: '2025-12-08T12:34:21.181Z' },
+      HeroBenkeiTimePlayed: { value: '253902', lastModified: '2026-08-30T14:45:03.023Z' },
+    },
+    heroFactsFromStatCard(card),
+  );
+  // "Benkei" is the internal codename; the roster resolves it to Sohei.
+  const [hero] = mapped.heroes;
+  assert.equal(hero?.name, 'Sohei');
+  assert.equal(hero?.lastPlayedAt, Date.parse('2026-08-30T14:45:03.023Z'));
+});
+
+test('a hero with no played-time timestamp still falls back to the card', () => {
+  // Losing the card fallback would blank the date for any hero whose
+  // played-time counter carries no timestamp, which is worse than an older one.
+  const mapped = mapForHonorStats(
+    {
+      HeroBenkeiReputation: { value: '13' },
+      HeroBenkeiTimePlayed: { value: '253902' },
+    },
+    heroFactsFromStatCard([
+      {
+        statName: 'HeroBenkeiReputation',
+        displayName: 'Benkei Reputation',
+        lastModified: '2025-12-08T12:34:21.181Z',
+      },
+    ]),
+  );
+  assert.equal(mapped.heroes[0]?.lastPlayedAt, Date.parse('2025-12-08T12:34:21.181Z'));
+});
+
 test('per-hero hours and matches are flagged when they come from different records', () => {
   // Real values for one hero, from both spaces of a pre-crossplay account.
   // The crossplay record has the fuller elapsed time, the PC record the fuller

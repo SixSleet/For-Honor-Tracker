@@ -103,7 +103,14 @@ export interface StatCardEntry {
 export interface HeroCardFact {
   /** Ubisoft's own name for the hero. */
   name: string;
-  /** When the player last played this hero, epoch ms. */
+  /**
+   * When this hero's reputation last changed, epoch ms.
+   *
+   * Used only as a fallback for "last played", because it is not that:
+   * reputation ticks over at the end of a level cycle, not each session. The
+   * hero's played-time counter carries the real last-played date — see where
+   * it is read in mapForHonorStats.
+   */
   lastPlayedAt: number | null;
 }
 
@@ -124,7 +131,11 @@ function heroNameFromLabel(label: string): string | null {
 
 /**
  * Reads the per-hero facts out of a stat card: Ubisoft's own name for each
- * hero codename, and when that hero was last played.
+ * hero codename, and when that hero's reputation last changed.
+ *
+ * The name is the valuable part — it is the publisher's own label, so hero
+ * codenames need no inference. The timestamp is only a fallback for
+ * last-played; the played-time counter is the real source.
  */
 export function heroFactsFromStatCard(cards: StatCardEntry[]): Map<string, HeroCardFact> {
   const facts = new Map<string, HeroCardFact>();
@@ -940,7 +951,28 @@ export function mapForHonorStats(
       const row = heroRow(codename);
       if (field === 'Level') row.level = num(stats[key]);
       else if (field === 'Reputation') row.rep = num(stats[key]);
-      else row.time = num(stats[key]);
+      else {
+        row.time = num(stats[key]);
+        // When this hero was last played, from the last time their played-time
+        // counter moved.
+        //
+        // The stat card's per-hero timestamp says when that hero's REPUTATION
+        // last changed, which is a different and much rarer event: reputation
+        // ticks over only at the end of a full level cycle, so a hero played
+        // yesterday keeps whatever date they last prestiged on. Measured on a
+        // live profile, 38 of 39 heroes disagreed between the two, and the
+        // reputation date was systematically the older — Benkei last played
+        // 2026-08-30 against a reputation date of 2025-12-08, so the page was
+        // reporting a hero as untouched for nine months while it was in
+        // regular use.
+        //
+        // Time played moves every session, comes from the same merged family
+        // as the hours shown beside it, and was verified stable across
+        // repeated queries, so it is neither a read-time artefact nor from a
+        // different record than the figure it dates.
+        const played = epoch(stats[key]?.lastModified);
+        if (played !== null) row.lastPlayedAt = played;
+      }
       continue;
     }
     const matchesMatch = heroMatchesKey.exec(key);
