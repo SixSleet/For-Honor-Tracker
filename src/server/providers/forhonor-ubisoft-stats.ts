@@ -57,17 +57,23 @@ import { heroIdentity } from '../../shared/hero-roster.ts';
  *   - /v1/profiles/{id}/leaderboards?spaceId=<crossplay> returns 200 with a
  *     catalogue of leaderboard definitions — including
  *     RankingPointsPerGameModeSeasonal.gameMode.R_DL2 ("Ranked leaderboard
- *     for ranked duel"). So the Ranked Duel rank is a real concept in the
- *     leaderboards service — but only its definition is reachable. Asking
- *     /v1/profiles/stats for that statName returns nothing, and every
- *     per-player leaderboard record route (/leaderboards/<name>,
- *     /leaderboards/<name>/records, …) is 404. The number itself is served
- *     by the game's own title-auth endpoints (herologin/heroranking), which
- *     this project does not call: reaching them means presenting a game
- *     build id and sandbox headers, i.e. impersonating the client.
- *   - badges, wallets, friends, clubs, units, progressions, playtime, titles
- *     (profile-scoped) and products, configuration (space-scoped) are all 404
- *     — routes that do not exist on this service for this game.
+ *     for ranked duel"). The per-player read route for these does exist and
+ *     is reachable with only the session ticket — GET /v1/spaces/<space>/
+ *     leaderboards/<name>?profileId=<id> returns 200 — but every ranked
+ *     leaderboard comes back cardinality 0, lastModified 1970, standings [],
+ *     with or without a profile id: the definitions are published but Ubisoft
+ *     never populates them for For Honor. So there is no ranked rank to read
+ *     here for anyone. The live number is served only by the game's own
+ *     title-auth endpoints (herologin/heroranking), which this project does
+ *     not call: reaching them means presenting a game build id and sandbox
+ *     headers, i.e. impersonating the client.
+ *   - /v2/profiles/{id}/stats returns the same 186 lifetime keys as v1 in a
+ *     different envelope, every one period 0 with no calendarEntryId; the
+ *     periodic-stat fields exist in the schema but are unused for this game,
+ *     so there is no per-season breakdown to read.
+ *   - badges, wallets, friends, clubs, units, progressions, playtime, titles,
+ *     status, presence (profile-scoped) and products, configuration
+ *     (space-scoped) are all 404 — routes that do not exist here for this game.
  */
 
 /**
