@@ -929,7 +929,16 @@ export const ubisoftProvider: DataProvider = {
     // readably from the codename, never guessed.
     const mapped = hasStats
       ? mapForHonorStats(rawStats as RawStats, heroFacts, playHistory.sessions)
-      : { season: null, overview: [], overall: [], heroes: [], gameModes: [], extraGroups: [], undecoded: 0 };
+      : {
+          season: null,
+          overview: [],
+          overall: [],
+          heroes: [],
+          heroTimeAndMatchesSplit: false,
+          gameModes: [],
+          extraGroups: [],
+          undecoded: 0,
+        };
 
     // Ubisoft's stats service writes on its own schedule and can lag live
     // play. This used to be a blanket warning on every report, which is both
@@ -1007,7 +1016,9 @@ export const ubisoftProvider: DataProvider = {
         availability: hasStats && mapped.heroes.length > 0 ? 'confirmed' : 'unavailable',
         explanation:
           hasStats && mapped.heroes.length > 0
-            ? 'Reputation, level and time played per hero, straight from Ubisoft. Search and sort below.'
+            ? mapped.heroTimeAndMatchesSplit
+              ? 'Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below. Hours and matches are kept on different platform records for this account, so they are each the fullest figure Ubisoft has for that counter — but they do not divide into a time per match.'
+              : 'Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below.'
             : 'No per-hero data was returned for this profile.',
         items: mapped.heroes,
       },

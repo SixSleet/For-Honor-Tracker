@@ -488,6 +488,12 @@ export interface MappedForHonorStats {
   overview: Stat[];
   overall: Stat[];
   heroes: HeroStat[];
+  /**
+   * True when per-hero hours and per-hero match counts were taken from
+   * different platform records, so the two must not be divided into a
+   * per-match time. See where it is computed for the measurement behind it.
+   */
+  heroTimeAndMatchesSplit: boolean;
   /** Matches played and won per game mode, where Ubisoft breaks them out. */
   gameModes: GameModeStat[];
   extraGroups: StatGroup[];
@@ -945,6 +951,27 @@ export function mapForHonorStats(
     }
   }
 
+  // Whether a hero's hours and match count come from different platform
+  // records. They are separate stat families, so the merge picks each from
+  // whichever space recorded more of it — and on a pre-crossplay account that
+  // is systematically a different space for each: measured on a real profile,
+  // all twelve heroes carrying both counters drew hours from the crossplay
+  // record and matches from the PC one. Ubisoft appears to keep match counts
+  // on the platform record and elapsed time on the crossplay record, so both
+  // values are the fullest available for their own counter and neither is
+  // wrong — but dividing one by the other yields a per-match time for matches
+  // that record never timed. The section says so rather than letting a reader
+  // do that arithmetic silently.
+  const heroTimeAndMatchesSplit = [...heroMap.keys()].length > 0 &&
+    Object.keys(stats).some((key) => {
+      const matchesMatch = heroMatchesKey.exec(key);
+      if (!matchesMatch) return false;
+      const timeKey = `Hero${matchesMatch[1]}TimePlayed`;
+      const time = stats[timeKey];
+      if (!time || stats[key]?.spaceIndex === undefined || time.spaceIndex === undefined) return false;
+      return stats[key].spaceIndex !== time.spaceIndex;
+    });
+
   // Names produced by heroRow() are keyed by resolved hero name, so the
   // original raw codename is gone here — Map.entries() below yields
   // [name, row] directly.
@@ -1097,7 +1124,16 @@ export function mapForHonorStats(
     'The territory battle between Knights, Vikings, Samurai and Wu Lin. Deploying war assets on its map is how a player takes part.',
   );
 
-  return { season: metaSeason, overview, overall, heroes, gameModes, extraGroups, undecoded };
+  return {
+    season: metaSeason,
+    overview,
+    overall,
+    heroes,
+    heroTimeAndMatchesSplit,
+    gameModes,
+    extraGroups,
+    undecoded,
+  };
 }
 
 /** One entry of Ubisoft's `GET /v2/profiles?userId=` response. */

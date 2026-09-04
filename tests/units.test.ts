@@ -793,6 +793,29 @@ test('a figure recorded in the same ledger as its neighbour is left plainly stat
   );
 });
 
+test('per-hero hours and matches are flagged when they come from different records', () => {
+  // Real values for one hero, from both spaces of a pre-crossplay account.
+  // The crossplay record has the fuller elapsed time, the PC record the fuller
+  // match count, so the merge takes one from each — measured across a real
+  // profile, that happened for every hero carrying both counters.
+  const merged = mergeSpaceStats([
+    { HeroKnightChampionTimePlayed: s(253902), 'MatchesPlayedperHero.Hero.Hero_KnightChampion': s(50) },
+    { HeroKnightChampionTimePlayed: s(175446), 'MatchesPlayedperHero.Hero.Hero_KnightChampion': s(575) },
+  ]);
+  assert.equal(merged.HeroKnightChampionTimePlayed.value, '253902');
+  assert.equal(merged['MatchesPlayedperHero.Hero.Hero_KnightChampion'].value, '575');
+  // 253,902s over 575 matches would read as 7.4 minutes a match, for matches
+  // the record holding those seconds never timed.
+  assert.equal(mapForHonorStats(merged).heroTimeAndMatchesSplit, true);
+});
+
+test('a single-record account is not warned about a split it does not have', () => {
+  const merged = mergeSpaceStats([
+    { HeroKnightChampionTimePlayed: s(175446), 'MatchesPlayedperHero.Hero.Hero_KnightChampion': s(575) },
+  ]);
+  assert.equal(mapForHonorStats(merged).heroTimeAndMatchesSplit, false);
+});
+
 test('play history folds sessions across SKUs: sum count, earliest first, latest last', () => {
   // The real shape returned for a crossplay PlayStation player: two For Honor
   // application ids, each with its own stored first/last session and count.
