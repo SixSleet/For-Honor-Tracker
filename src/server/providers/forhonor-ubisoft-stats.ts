@@ -3,6 +3,7 @@
 // guard lives on the modules that hold configuration and perform requests.
 import type { GameModeStat, HeroStat, PlatformLink, Stat, StatGroup } from '@/shared/types';
 import { heroIdentity } from '../../shared/hero-roster.ts';
+import { formatDate } from '../../shared/format.ts';
 
 /**
  * Maps Ubisoft's raw For Honor stat vocabulary into the tracker's display
@@ -118,6 +119,29 @@ function epoch(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * When a figure was last actually written, if it came from a ledger that is no
+ * longer being updated.
+ *
+ * A player who moved to the crossplay record leaves the old platform record
+ * frozen: measured on a live profile, all 178 keys in the platform space stop
+ * dead on 2025-09-09 while the crossplay space is still being written today.
+ * Several counters are nonetheless fullest in that frozen record, because the
+ * crossplay one restarted them from zero at the move — its mode breakdown
+ * accounts for 10.7% of its own PvP matches against the platform record's 94%.
+ *
+ * So those figures are real and they are the largest Ubisoft holds, but they
+ * are a year old and the page was showing them as current. This returns the
+ * date to say them as of, and nothing for a figure from the live ledger.
+ */
+function recordedAsOf(stats: RawStats, key: string): string | null {
+  const entry = stats[key];
+  // spaceIndex 0 is the freshest snapshot; anything else is an older ledger.
+  if (!entry || entry.spaceIndex === undefined || entry.spaceIndex === 0) return null;
+  const at = epoch(entry.lastModified);
+  return at === null ? null : formatDate(at);
 }
 
 /**
@@ -505,6 +529,11 @@ export interface MappedForHonorStats {
    * per-match time. See where it is computed for the measurement behind it.
    */
   heroTimeAndMatchesSplit: boolean;
+  /**
+   * The day Ubisoft last wrote the per-hero match counts, when they come from
+   * a record it has stopped updating. Null when they are current.
+   */
+  heroMatchesAsOf: string | null;
   /** Matches played and won per game mode, where Ubisoft breaks them out. */
   gameModes: GameModeStat[];
   extraGroups: StatGroup[];
@@ -684,6 +713,7 @@ export function mapForHonorStats(
   // must not be presented as two parts of one whole.
   const playersKilledIsComparable =
     stats.PlayersKilledanygamemode?.spaceIndex === stats.KillTotal?.spaceIndex;
+  const playersKilledAsOf = recordedAsOf(stats, 'PlayersKilledanygamemode');
   const wins = num(take('MatchesWonwithanyHero.T_Win.1'));
   // Same test for the lifetime win count against the match counts it is shown
   // beside. On a real pre-crossplay account the wins come from the PC ledger
@@ -693,6 +723,7 @@ export function mapForHonorStats(
   // uses the per-mode counters, which do share a scope.)
   const winsIsComparable =
     stats['MatchesWonwithanyHero.T_Win.1']?.spaceIndex === stats.GamesPlayedPVP?.spaceIndex;
+  const winsAsOf = recordedAsOf(stats, 'MatchesWonwithanyHero.T_Win.1');
   const reputation = num(take('Reputation'));
   const timeTotal = num(take('TimePlayedTotal'));
   const timePvp = num(take('TimePlayedPVP'));
@@ -875,7 +906,7 @@ export function mapForHonorStats(
       // So the row keeps its (real) value and says where it comes from.
       note: playersKilledIsComparable
         ? 'Excludes AI opponents'
-        : 'Excludes AI opponents. Counted on a different platform record from the kills above, so the two do not subtract.',
+        : `Excludes AI opponents. Counted on the older platform record, which Ubisoft last wrote on ${playersKilledAsOf ?? 'an earlier date'}, so it is not current and does not subtract from the kills above.`,
     },
     { key: 'kills-per-match', label: 'Kills per match', value: perMatch(kills), kind: 'ratio' },
     { key: 'deaths-per-match', label: 'Deaths per match', value: perMatch(deaths), kind: 'ratio' },
@@ -994,6 +1025,7 @@ export function mapForHonorStats(
   // wrong — but dividing one by the other yields a per-match time for matches
   // that record never timed. The section says so rather than letting a reader
   // do that arithmetic silently.
+  let heroMatchesAsOf: string | null = null;
   const heroTimeAndMatchesSplit = [...heroMap.keys()].length > 0 &&
     Object.keys(stats).some((key) => {
       const matchesMatch = heroMatchesKey.exec(key);
@@ -1001,7 +1033,9 @@ export function mapForHonorStats(
       const timeKey = `Hero${matchesMatch[1]}TimePlayed`;
       const time = stats[timeKey];
       if (!time || stats[key]?.spaceIndex === undefined || time.spaceIndex === undefined) return false;
-      return stats[key].spaceIndex !== time.spaceIndex;
+      if (stats[key].spaceIndex === time.spaceIndex) return false;
+      heroMatchesAsOf = heroMatchesAsOf ?? recordedAsOf(stats, key);
+      return true;
     });
 
   // Names produced by heroRow() are keyed by resolved hero name, so the
@@ -1076,7 +1110,7 @@ export function mapForHonorStats(
       kind: 'number',
       note: winsIsComparable
         ? 'All modes, lifetime'
-        : 'All modes, lifetime. Counted on a different platform record from the matches above, so the two do not divide.',
+        : `All modes, as Ubisoft last recorded it on ${winsAsOf ?? 'an earlier date'} — the older platform record, so it is not current and does not divide into the matches above.`,
     },
     {
       key: 'win-rate',
@@ -1162,6 +1196,7 @@ export function mapForHonorStats(
     overall,
     heroes,
     heroTimeAndMatchesSplit,
+    heroMatchesAsOf,
     gameModes,
     extraGroups,
     undecoded,

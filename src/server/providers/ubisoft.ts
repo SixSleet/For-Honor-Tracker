@@ -935,6 +935,7 @@ export const ubisoftProvider: DataProvider = {
           overall: [],
           heroes: [],
           heroTimeAndMatchesSplit: false,
+          heroMatchesAsOf: null,
           gameModes: [],
           extraGroups: [],
           undecoded: 0,
@@ -1017,7 +1018,7 @@ export const ubisoftProvider: DataProvider = {
         explanation:
           hasStats && mapped.heroes.length > 0
             ? mapped.heroTimeAndMatchesSplit
-              ? 'Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below. Hours and matches are kept on different platform records for this account, so they are each the fullest figure Ubisoft has for that counter — but they do not divide into a time per match.'
+              ? `Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below. Hours and last-played are current, but the match counts come from this account's older platform record, which Ubisoft last wrote on ${mapped.heroMatchesAsOf ?? 'an earlier date'} — so they are the fullest counts Ubisoft holds, not counts as of today, and they do not divide into the hours.`
               : 'Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below.'
             : 'No per-hero data was returned for this profile.',
         items: mapped.heroes,

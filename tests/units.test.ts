@@ -752,11 +752,24 @@ test('figures from different platform ledgers are never presented as subtractabl
   // player-kill and win counts, so taking each counter's largest value is
   // right for that counter — and leaves two figures on one page that were
   // never counted over the same matches.
+  const live = '2026-09-03T21:12:13.362Z';
+  // The platform record stops dead here: all 178 of its keys share this date.
+  const frozen = '2025-09-09T16:05:58.244Z';
   const merged = mergeSpaceStats([
-    // Freshest: crossplay.
-    { KillTotal: s(81509), PlayersKilledanygamemode: s(10418), GamesPlayedPVP: s(22026), 'MatchesWonwithanyHero.T_Win.1': s(1875) },
-    // Older: PC.
-    { KillTotal: s(53216), PlayersKilledanygamemode: s(51365), GamesPlayedPVP: s(14895), 'MatchesWonwithanyHero.T_Win.1': s(10708) },
+    // Freshest: crossplay, still being written.
+    {
+      KillTotal: { value: '81509', lastModified: live },
+      PlayersKilledanygamemode: { value: '10418', lastModified: live },
+      GamesPlayedPVP: { value: '22026', lastModified: live },
+      'MatchesWonwithanyHero.T_Win.1': { value: '1875', lastModified: live },
+    },
+    // Older: PC, frozen a year ago but still holding the larger figures.
+    {
+      KillTotal: { value: '53216', lastModified: frozen },
+      PlayersKilledanygamemode: { value: '51365', lastModified: frozen },
+      GamesPlayedPVP: { value: '14895', lastModified: frozen },
+      'MatchesWonwithanyHero.T_Win.1': { value: '10708', lastModified: frozen },
+    },
   ]);
   // Each counter keeps its fullest value, from whichever ledger recorded it.
   assert.equal(merged.KillTotal.value, '81509');
@@ -771,11 +784,15 @@ test('figures from different platform ledgers are never presented as subtractabl
   // two records that never counted the same matches, so the row says so.
   const players = mapped.overall.find((x) => x.key === 'players-killed');
   assert.equal(players?.value, 51365);
-  assert.match(String(players?.note), /different platform record/i);
+  // Dated, not merely disclaimed: a year-old figure shown as current is the
+  // problem, so the note carries the day Ubisoft last wrote it.
+  assert.match(String(players?.note), /older platform record/i);
+  assert.match(String(players?.note), /2025/);
   const wins = mapped.extraGroups
     .find((g) => g.key === 'matches-by-type')
     ?.stats.find((x) => x.key === 'wins');
-  assert.match(String(wins?.note), /different platform record/i);
+  assert.match(String(wins?.note), /older platform record/i);
+  assert.match(String(wins?.note), /2025/);
 });
 
 test('a figure recorded in the same ledger as its neighbour is left plainly stated', () => {
