@@ -40,9 +40,15 @@ import { formatDate } from '../../shared/format.ts';
  *     ledge and environmental kills, revenge activations, round records).
  *
  * The account also owns 32 Ubisoft spaces, and exactly two carry For Honor's
- * application id — both are already read, so there is no third space holding
- * the remainder. What this file maps is therefore everything the public API
- * has to give; anything still missing is missing upstream.
+ * application id — both are already read. Ubisoft's own client configuration
+ * confirms this from the other direction: it names four For Honor spaces
+ * (default_space_id_pc, _ps4, _xone and the CrossPlatform Live one), and the
+ * two legacy console spaces answer /v1/profiles/stats with an empty `{}` for a
+ * PlayStation player, their stat cards carrying every value as "" and
+ * lastModified 1970. So there is no console-only space holding the per-hero
+ * or per-mode figures a console player appears to be missing; the two spaces
+ * read here are the whole of it. What this file maps is therefore everything
+ * the public API has to give; anything still missing is missing upstream.
  *
  * The endpoint surface was swept the same way (/api/diagnostics?probePaths=),
  * with the same result. Confirmed against Ubisoft's public service:
@@ -98,6 +104,16 @@ import { formatDate } from '../../shared/format.ts';
  * battlepasses/seasons answers "There is no season configured", and
  * profiles/{profileId}/stats?spaceId= is simply a second route to the same
  * dictionary already read.
+ *
+ * The configuration also names For Honor's own title services — playerstats2,
+ * heroleaderboard, heroranking, skillrating, all under
+ * /v1/spaces/<space>/title/hero/hero-live/. Each is reachable and routes: an
+ * unknown sub-path returns that service's own 404 shape rather than the
+ * UbiServices gateway's, and none answers 401 or 403, so they are not
+ * rejecting this session. They simply do not publish their route table. The
+ * only way to enumerate it is to take the routes out of the game client,
+ * which is the reverse-engineering road to impersonating it, so the search
+ * stops here rather than brute-forcing path guesses at a live service.
  */
 
 /**
