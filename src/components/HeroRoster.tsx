@@ -4,6 +4,7 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import type { HeroStat } from '@/shared/types';
 import { FACTION_ORDER, factionStyle } from '@/shared/faction';
 import { LOCALE } from '@/shared/format';
+import { MAX_REPUTATION, repPercent } from '@/shared/reputation';
 
 type SortKey = 'reputation' | 'level' | 'time' | 'matches' | 'recent' | 'name';
 type View = 'grid' | 'list';
@@ -143,9 +144,6 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
     return [...filtered].sort((a, b) => compare(sort, a, b));
   }, [items, query, sort, faction]);
 
-  // The rep rail is relative to this player's own best hero, so it reads as
-  // "how far up your roster" rather than against an invented cap.
-  const topRep = Math.max(...items.map((hero) => hero.reputation ?? 0), 1);
   const totals = useMemo(
     () =>
       rows.reduce(
@@ -229,7 +227,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(8.75rem,1fr))] gap-2 p-3 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))]">
           {rows.map((hero) => {
             const style = factionStyle(hero.faction);
-            const repPct = Math.round(((hero.reputation ?? 0) / topRep) * 100);
+            const repPct = repPercent(hero.reputation);
             const last = ago(hero.lastPlayedAt);
             return (
               <li key={hero.name} className="hero-card p-3">
@@ -254,6 +252,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
                 </div>
                 <div
                   className="meter mt-1.5"
+                  title={`Reputation ${hero.reputation ?? 0} of ${MAX_REPUTATION}`}
                   style={{ '--value': `${repPct}%`, '--accent': style.accent } as CSSProperties}
                 >
                   <span />
@@ -283,7 +282,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
         <ul className="divide-y divide-line">
           {rows.map((hero) => {
             const style = factionStyle(hero.faction);
-            const repPct = Math.round(((hero.reputation ?? 0) / topRep) * 100);
+            const repPct = repPercent(hero.reputation);
             const last = ago(hero.lastPlayedAt);
             return (
               <li
@@ -301,6 +300,7 @@ export function HeroRoster({ items }: { items: HeroStat[] }) {
                 <div className="flex items-center justify-end gap-2 sm:col-start-3">
                   <div
                     className="meter hidden w-14 sm:block"
+                    title={`Reputation ${hero.reputation ?? 0} of ${MAX_REPUTATION}`}
                     style={{ '--value': `${repPct}%`, '--accent': style.accent } as CSSProperties}
                   >
                     <span />

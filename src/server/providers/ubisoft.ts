@@ -9,13 +9,16 @@ import { env, ubisoftConfigured } from '../env';
 import { parseJson, tracedFetch, type TraceCollector } from '../http';
 import { readSession, writeSession } from '../ubisoft-session-store';
 import {
+  aggregatePlayHistory,
   FOR_HONOR_SPACE_IDS,
   heroFactsFromStatCard,
   mapForHonorStats,
   mergeSpaceStats,
   platformProfiles,
-  playedRangeFromStatCard,
+  lastPlayedFromStatCard,
   type PlatformProfiles,
+  type PlayHistory,
+  type PlayHistoryApplication,
   type RawPlatformProfile,
   type RawStats,
   type StatCardEntry,
@@ -465,41 +468,39 @@ async function discoverForHonorSpaceIds(
 }
 
 /**
- * How many separate sessions the player has launched For Honor for.
+ * A player's For Honor play history: sessions launched, and the first and last
+ * of them Ubisoft has on record.
  *
- * `gamesplayed` returns nulls for every play-history field, but the same
- * numbers are populated on `/v2/profiles/{id}/applications` when it is asked
- * for specific application ids. That is where the session count lives — a
- * figure nothing else on the page carries, and the one that makes average
- * session length computable.
+ * `gamesplayed` returns nulls for every play-history field, but the same record
+ * is populated on `/v3/profiles/{id}/applications` when it is asked for
+ * specific application ids. v3 carries three real per-player figures the rest
+ * of the page cannot get anywhere else — the session count (which makes average
+ * session length computable), and stable first/last session dates. It is asked
+ * for every For Honor application id the account owns, because those are
+ * per-platform SKU and a player's history is spread across them;
+ * aggregatePlayHistory folds them into one. (v2 carries the same session count
+ * but stamps both dates with the read time, so it is not used.)
  */
-async function fetchSessionCount(
+async function fetchPlayHistory(
   current: Session,
   profileId: string,
   applicationIds: string[],
   trace: TraceCollector,
-): Promise<number | null> {
-  if (applicationIds.length === 0) return null;
+): Promise<PlayHistory> {
+  const empty: PlayHistory = { sessions: null, firstSessionAt: null, lastSessionAt: null };
+  if (applicationIds.length === 0) return empty;
   const response = await tracedFetch(
     {
       provider: info.id,
-      label: 'Play history (GET /v2/profiles/{id}/applications)',
-      url: `${UBI_SERVICES}/v2/profiles/${encodeURIComponent(profileId)}/applications?applicationIds=${applicationIds.map(encodeURIComponent).join(',')}`,
+      label: 'Play history (GET /v3/profiles/{id}/applications)',
+      url: `${UBI_SERVICES}/v3/profiles/${encodeURIComponent(profileId)}/applications?applicationIds=${applicationIds.map(encodeURIComponent).join(',')}`,
       headers: authHeaders(current),
     },
     trace,
   );
-  if (!response.ok) return null;
-  const body = parseJson<{ applications?: Array<{ sessionsPlayed?: number }> }>(response.text);
-  let total = 0;
-  let seen = false;
-  for (const application of body?.applications ?? []) {
-    if (typeof application.sessionsPlayed === 'number' && application.sessionsPlayed >= 0) {
-      total += application.sessionsPlayed;
-      seen = true;
-    }
-  }
-  return seen ? total : null;
+  if (!response.ok) return empty;
+  const body = parseJson<{ applications?: PlayHistoryApplication[] }>(response.text);
+  return aggregatePlayHistory(body?.applications ?? []);
 }
 
 /**
@@ -519,6 +520,11 @@ function snapshotFreshness(stats: RawStats | null): number {
   return read('MetaGameSeason') * 1_000_000 + read('Reputation');
 }
 
+// Stays on v1: /v2/profiles/stats answers 200 but returns the same 186 keys
+// in a different envelope with the periodic-stat fields unused for this game,
+// and /v3 is a 404. gamesplayed and statscard are v1-only likewise (v2/v3 both
+// 404). Every data endpoint was version-swept; applications was the only one a
+// newer version improved — see fetchPlayHistory.
 async function fetchProfileStats(
   current: Session,
   profileId: string,
@@ -548,8 +554,9 @@ async function fetchProfileStats(
  * carries Ubisoft's player-facing label for every stat, including one per hero
  * ("Warden Reputation", "Jiang Jun Reputation"), plus each stat's first and
  * last write. That is the only authoritative source for what Ubisoft's hero
- * codenames actually mean, and the only source anywhere for when a player
- * started and when they last played.
+ * codenames actually mean, and — through the last write — the only source for
+ * when a player last played. The first write is not a player fact: it is when
+ * Ubisoft created the counter, identical on every account.
  *
  * Requires Ubi-LocaleCode; without it Ubisoft answers 400 before even checking
  * the ticket.
@@ -581,6 +588,11 @@ async function fetchStatsCard(
  * The platforms an account plays on, from the profiles that share its userId.
  * The reading of that response — which handles are shown and which are not —
  * lives in the pure mapper beside this one, where it is tested directly.
+ *
+ * Stays on v2 deliberately: /v3/profiles?userId= answers 200 but returns the
+ * identical field set and the identical profiles (checked live), so there is
+ * nothing to gain, and v4 is a 404. The one endpoint where a higher version
+ * carried better data was applications — see fetchPlayHistory.
  */
 async function fetchPlatforms(
   current: Session,
@@ -743,14 +755,16 @@ export const ubisoftProvider: DataProvider = {
     // Three more sources, all fetched together so they cost one round trip:
     // the stat card (Ubisoft's own hero names, and first/last played), the
     // platforms the account plays on, and whether an avatar exists.
-    const [statCard, platforms, avatarUrl, sessions] = await Promise.all([
+    const [statCard, platforms, avatarUrl, playHistory] = await Promise.all([
       freshest ? fetchStatsCard(current, identity.id, freshest.spaceId, trace) : Promise.resolve([] as StatCardEntry[]),
       fetchPlatforms(current, identity.id, trace),
       fetchAvatarUrl(identity.id),
-      fetchSessionCount(current, identity.id, applicationIds, trace),
+      fetchPlayHistory(current, identity.id, applicationIds, trace),
     ]);
     const heroFacts = heroFactsFromStatCard(statCard);
-    const played = playedRangeFromStatCard(statCard);
+    // The stat card's last-write time is the primary "last played"; the play
+    // history's last session covers a player whose card carries no timestamp.
+    const lastPlayedAt = lastPlayedFromStatCard(statCard) ?? playHistory.lastSessionAt;
 
     // Ubisoft has no achievement data of its own for For Honor, but it does
     // say which Steam account this one is linked to — and Steam publishes
@@ -769,8 +783,18 @@ export const ubisoftProvider: DataProvider = {
     // stats. Known hero codenames become in-game names; unknown ones are shown
     // readably from the codename, never guessed.
     const mapped = hasStats
-      ? mapForHonorStats(rawStats as RawStats, heroFacts, sessions)
-      : { season: null, overview: [], overall: [], heroes: [], gameModes: [], extraGroups: [], undecoded: 0 };
+      ? mapForHonorStats(rawStats as RawStats, heroFacts, playHistory.sessions)
+      : {
+          season: null,
+          overview: [],
+          overall: [],
+          heroes: [],
+          heroTimeAndMatchesSplit: false,
+          heroMatchesAsOf: null,
+          gameModes: [],
+          extraGroups: [],
+          undecoded: 0,
+        };
 
     // Ubisoft's stats service writes on its own schedule and can lag live
     // play. This used to be a blanket warning on every report, which is both
@@ -778,7 +802,7 @@ export const ubisoftProvider: DataProvider = {
     // the exact moment Ubisoft last wrote these figures, and the page states
     // it. The warning is kept only for a report that has no such timestamp,
     // where a reader would otherwise have nothing to judge freshness by.
-    if (hasStats && played.lastPlayedAt === null) {
+    if (hasStats && lastPlayedAt === null) {
       notices.push(
         'Ubisoft updates these figures on its own schedule, so very recent play may not be counted yet.',
       );
@@ -806,13 +830,17 @@ export const ubisoftProvider: DataProvider = {
       provider: info,
       fetchedAt: Date.now(),
       cached: false,
-      firstPlayedAt: played.firstPlayedAt,
-      lastPlayedAt: played.lastPlayedAt,
+      lastPlayedAt,
+      firstSessionAt: playHistory.firstSessionAt,
       platforms: platforms.links,
       season: mapped.season,
       overview: {
         key: 'overview',
-        label: 'Story mode',
+        // Not "Story mode": this group is the profile summary — faction,
+        // lifetime reputation, matches, hours and the account name — of which
+        // story completion is one row. Naming the whole block after that one
+        // row told a reader the other five figures were campaign figures.
+        label: 'At a glance',
         availability: 'confirmed',
         explanation: undefined,
         stats: hasStats
@@ -844,7 +872,9 @@ export const ubisoftProvider: DataProvider = {
         availability: hasStats && mapped.heroes.length > 0 ? 'confirmed' : 'unavailable',
         explanation:
           hasStats && mapped.heroes.length > 0
-            ? 'Reputation, level and time played per hero, straight from Ubisoft. Search and sort below.'
+            ? mapped.heroTimeAndMatchesSplit
+              ? `Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below. Hours and last-played are current, but the match counts come from this account's older platform record, which Ubisoft last wrote on ${mapped.heroMatchesAsOf ?? 'an earlier date'} — so they are the fullest counts Ubisoft holds, not counts as of today, and they do not divide into the hours.`
+              : 'Reputation, level, time played and matches per hero, straight from Ubisoft. Search and sort below.'
             : 'No per-hero data was returned for this profile.',
         items: mapped.heroes,
       },
@@ -858,8 +888,26 @@ export const ubisoftProvider: DataProvider = {
       },
       matches: {
         availability: 'dead',
+        // Ubisoft's SDK URL catalogue (/v1/spaces/{spaceId}/parameters, under
+        // us-sdkClientUrls) does name profiles/{profileId}/matches, and that
+        // route is live: it answers 401 errorCode 1510, "The given profileId
+        // does not match the ticket", for another player, and drops to a 400
+        // for the ticket's own profile. So it is real and ticket-scoped.
+        //
+        // But it is not a history archive, and an earlier version of this note
+        // wrongly said it was. The catalogue lists that exact URL twice — as
+        // profilesMatches AND profilesMatchmakingMatches — and its neighbours
+        // are profilesMatchmakingOnlineAccess and matches/precise/{client,match}state.
+        // Its errors carry errorContext "match" and complain about "a property
+        // in the request body". That is the matchmaking service, the one that
+        // puts a player into a game, not a record of games already played.
+        // Every query shape tried against it returned the same generic 400.
+        //
+        // So the honest position is the original one: no readable match-history
+        // endpoint has been found. Signing a player in would not change that,
+        // because the thing login would unlock is matchmaking state.
         explanation:
-          'The official For Honor match-history site (game-forhonor.ubisoft.com) has been decommissioned. No replacement endpoint was found.',
+          'No match history is available. The public site that used to show it (game-forhonor.ubisoft.com) is gone, and nothing in Ubisoft’s current service list replaces it — the one endpoint named "matches" belongs to matchmaking, which is about joining a game rather than recording finished ones.',
         items: [],
       },
       achievements: {
@@ -870,7 +918,13 @@ export const ubisoftProvider: DataProvider = {
             ? achievements?.privacyState && achievements.privacyState !== 'public'
               ? 'This account has a Steam profile linked, but Steam reports its game details as not public, so achievements are hidden. Only the player can change that.'
               : 'This account has a Steam profile linked, but no For Honor achievements could be read from it.'
-            : 'Ubisoft publishes no achievement data for For Honor, and this account has no Steam profile linked to read them from.',
+            // Ubisoft does hold achievements — profiles/{profileId}/playerAchievements
+            // is live — but it answers 403 errorCode 4, "The provided profileId
+            // must belong to the user's ticket", for anyone but the signed-in
+            // account. So it can never serve a searched player, and Steam is
+            // genuinely the only readable source. Said plainly rather than
+            // claiming Ubisoft has no such data.
+            : 'Ubisoft keeps achievements private to the signed-in account, so they cannot be read for a player you searched. Steam publishes them for public profiles, and this account has no Steam profile linked.',
         items: achievements?.items ?? [],
         unlockedCount: achievements?.unlockedCount ?? 0,
         totalCount: achievements?.totalCount ?? 0,

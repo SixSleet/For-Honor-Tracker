@@ -3,6 +3,7 @@
 // guard lives on the modules that hold configuration and perform requests.
 import type { GameModeStat, HeroStat, PlatformLink, Stat, StatGroup } from '@/shared/types';
 import { heroIdentity } from '../../shared/hero-roster.ts';
+import { formatDate } from '../../shared/format.ts';
 
 /**
  * Maps Ubisoft's raw For Honor stat vocabulary into the tracker's display
@@ -18,6 +19,108 @@ import { heroIdentity } from '../../shared/hero-roster.ts';
  * Nothing here is invented. Every value shown is a value Ubisoft returned;
  * unknown hero codenames are rendered from the codename itself rather than
  * guessed at, and stats the API does not return are simply absent.
+ *
+ * The default set is the whole set. /v1/profiles/stats also accepts an
+ * explicit `statNames` list, which raised the obvious question of whether it
+ * holds stats it does not volunteer. It does not: roughly 105 candidate names
+ * were asked for directly (via /api/diagnostics?probeStats=), every batch
+ * carrying a known-good control, and not one returned a value. Confirmed
+ * absent rather than merely unmapped:
+ *
+ *   - per-hero wins, losses, kills, deaths and assists, under every spelling
+ *     the faceted key convention allows — the game's own Heroes Performance
+ *     panel shows these, so it reads them from somewhere else entirely;
+ *   - every game mode except Duel (DL) and Dominion (DMN). Brawl, Breach,
+ *     Skirmish, Elimination, Tribute, Arcade and Ranked Duel were tried in
+ *     both short and long code forms;
+ *   - the Ranked Duel rank, and any ranked rating, tier, division or points;
+ *   - player level, gear score, XP, prestige, steel, salvage and orders;
+ *   - per-mode time played, kills and deaths;
+ *   - individual combat counters (parries, guard breaks, throws, executions,
+ *     ledge and environmental kills, revenge activations, round records).
+ *
+ * The account also owns 32 Ubisoft spaces, and exactly two carry For Honor's
+ * application id — both are already read. Ubisoft's own client configuration
+ * confirms this from the other direction: it names four For Honor spaces
+ * (default_space_id_pc, _ps4, _xone and the CrossPlatform Live one), and the
+ * two legacy console spaces answer /v1/profiles/stats with an empty `{}` for a
+ * PlayStation player, their stat cards carrying every value as "" and
+ * lastModified 1970. So there is no console-only space holding the per-hero
+ * or per-mode figures a console player appears to be missing; the two spaces
+ * read here are the whole of it. What this file maps is therefore everything
+ * the public API has to give; anything still missing is missing upstream.
+ *
+ * The endpoint surface was swept the same way (/api/diagnostics?probePaths=),
+ * with the same result. Confirmed against Ubisoft's public service:
+ *
+ *   - /v1/profiles/{id}/actions?spaceId=<hero>  and  /rewards?spaceId=<hero>
+ *     return 200 with real-looking For Honor content — Ubisoft Club
+ *     challenges ("Warden Initiate") and rewards ("Battle Pack"). But it is
+ *     the catalogue, not the player: two different players' responses are
+ *     byte-for-byte identical apart from the profile id echoed back and a
+ *     completionDate/purchaseDate equal to the moment of the request. Every
+ *     record reads value 0, xp 0, never actually completed. Not shipped: it
+ *     would present the same list on every page as if it were personal.
+ *   - /v1/profiles/{id}/leaderboards?spaceId=<crossplay> returns 200 with a
+ *     catalogue of leaderboard definitions — including
+ *     RankingPointsPerGameModeSeasonal.gameMode.R_DL2 ("Ranked leaderboard
+ *     for ranked duel"). The per-player read route for these does exist and
+ *     is reachable with only the session ticket — GET /v1/spaces/<space>/
+ *     leaderboards/<name>?profileId=<id> returns 200 — but every ranked
+ *     leaderboard comes back cardinality 0, lastModified 1970, standings [],
+ *     with or without a profile id: the definitions are published but Ubisoft
+ *     never populates them for For Honor. So there is no ranked rank to read
+ *     here for anyone. The live number is served only by the game's own
+ *     title-auth endpoints (herologin/heroranking), which this project does
+ *     not call: reaching them means presenting a game build id and sandbox
+ *     headers, i.e. impersonating the client.
+ *   - /v2/profiles/{id}/stats returns the same 186 lifetime keys as v1 in a
+ *     different envelope, every one period 0 with no calendarEntryId; the
+ *     periodic-stat fields exist in the schema but are unused for this game,
+ *     so there is no per-season breakdown to read.
+ *   - badges, wallets, friends, clubs, units, progressions, playtime, titles,
+ *     status, presence (profile-scoped) and products, configuration
+ *     (space-scoped) are all 404 — routes that do not exist here for this game.
+ *
+ * Guessing candidate paths is no longer necessary: Ubisoft publishes its own
+ * catalogue. GET /v1/spaces/<space>/parameters returns the live client
+ * configuration, and its `us-sdkClientUrls` group is 200 URL templates — 86 of
+ * them profile-scoped — naming every service the game client can call. Working
+ * through the ones that could carry player data settles the two absences this
+ * report has to explain, and neither is a missing endpoint:
+ *
+ *   - profiles/{profileId}/matches EXISTS and is ticket-scoped: 401 errorCode
+ *     1510, "The given profileId does not match the ticket", for anyone else,
+ *     and a 400 for the ticket's own profile. It is NOT match history, though
+ *     its name invites that reading. The catalogue lists the same URL twice,
+ *     as profilesMatches and profilesMatchmakingMatches, its neighbours are
+ *     profilesMatchmakingOnlineAccess and matches/precise/{client,match}state,
+ *     and its errors carry errorContext "match" while asking for "a property
+ *     in the request body". It is the matchmaking service — joining a game,
+ *     not recording finished ones — and every query shape tried returned the
+ *     same generic 400. No readable match-history endpoint has been found,
+ *     and signing a player in would not produce one.
+ *   - profiles/{profileId}/playerAchievements likewise exists and answers 403
+ *     errorCode 4, "The provided profileId must belong to the user's ticket".
+ *     So Ubisoft does hold achievements and will not release another player's;
+ *     Steam is genuinely the only readable source for them.
+ *
+ * Both are authorisation boundaries Ubisoft has drawn deliberately, and this
+ * project does not attempt to get around either. The rest of the catalogue is
+ * empty or unused for this game: progressiongraphs returns [] in both spaces,
+ * battlepasses/seasons answers "There is no season configured", and
+ * profiles/{profileId}/stats?spaceId= is simply a second route to the same
+ * dictionary already read.
+ *
+ * The configuration also names For Honor's own title services — playerstats2,
+ * heroleaderboard, heroranking, skillrating, all under
+ * /v1/spaces/<space>/title/hero/hero-live/. Each is reachable and routes: an
+ * unknown sub-path returns that service's own 404 shape rather than the
+ * UbiServices gateway's, and none answers 401 or 403, so they are not
+ * rejecting this session. They simply do not publish their route table. The
+ * only way to enumerate it is to take the routes out of the game client,
+ * which is the reverse-engineering road to impersonating it, so the search
+ * stops here rather than brute-forcing path guesses at a live service.
  */
 
 /**
@@ -47,7 +150,14 @@ export interface StatCardEntry {
 export interface HeroCardFact {
   /** Ubisoft's own name for the hero. */
   name: string;
-  /** When the player last played this hero, epoch ms. */
+  /**
+   * When this hero's reputation last changed, epoch ms.
+   *
+   * Used only as a fallback for "last played", because it is not that:
+   * reputation ticks over at the end of a level cycle, not each session. The
+   * hero's played-time counter carries the real last-played date — see where
+   * it is read in mapForHonorStats.
+   */
   lastPlayedAt: number | null;
 }
 
@@ -55,6 +165,29 @@ function epoch(value: string | null | undefined): number | null {
   if (!value) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * When a figure was last actually written, if it came from a ledger that is no
+ * longer being updated.
+ *
+ * A player who moved to the crossplay record leaves the old platform record
+ * frozen: measured on a live profile, all 178 keys in the platform space stop
+ * dead on 2025-09-09 while the crossplay space is still being written today.
+ * Several counters are nonetheless fullest in that frozen record, because the
+ * crossplay one restarted them from zero at the move — its mode breakdown
+ * accounts for 10.7% of its own PvP matches against the platform record's 94%.
+ *
+ * So those figures are real and they are the largest Ubisoft holds, but they
+ * are a year old and the page was showing them as current. This returns the
+ * date to say them as of, and nothing for a figure from the live ledger.
+ */
+function recordedAsOf(stats: RawStats, key: string): string | null {
+  const entry = stats[key];
+  // spaceIndex 0 is the freshest snapshot; anything else is an older ledger.
+  if (!entry || entry.spaceIndex === undefined || entry.spaceIndex === 0) return null;
+  const at = epoch(entry.lastModified);
+  return at === null ? null : formatDate(at);
 }
 
 /**
@@ -68,7 +201,11 @@ function heroNameFromLabel(label: string): string | null {
 
 /**
  * Reads the per-hero facts out of a stat card: Ubisoft's own name for each
- * hero codename, and when that hero was last played.
+ * hero codename, and when that hero's reputation last changed.
+ *
+ * The name is the valuable part — it is the publisher's own label, so hero
+ * codenames need no inference. The timestamp is only a fallback for
+ * last-played; the played-time counter is the real source.
  */
 export function heroFactsFromStatCard(cards: StatCardEntry[]): Map<string, HeroCardFact> {
   const facts = new Map<string, HeroCardFact>();
@@ -83,22 +220,81 @@ export function heroFactsFromStatCard(cards: StatCardEntry[]): Map<string, HeroC
 }
 
 /**
- * When the player started, and when they last played, from the stat card's
- * timestamps: the earliest stat start date and the latest change to any stat.
+ * When the player last played, from the latest change to any stat on the card.
+ *
+ * There is deliberately no "first played" counterpart here. The card also
+ * carries a `startDate` per stat, and it is tempting to read the earliest one
+ * as the day the player started — but it is the date Ubisoft *defined the
+ * counter*, not the date this account first played. It reads 2016-10-29 on
+ * every account, which is before For Honor released in February 2017, so it
+ * cannot be anyone's start date. A real per-player first-session date does
+ * exist, but on a different endpoint — see aggregatePlayHistory below.
  */
-export function playedRangeFromStatCard(cards: StatCardEntry[]): {
-  firstPlayedAt: number | null;
-  lastPlayedAt: number | null;
-} {
-  let first: number | null = null;
+export function lastPlayedFromStatCard(cards: StatCardEntry[]): number | null {
   let last: number | null = null;
   for (const card of cards) {
-    const start = epoch(card.startDate);
-    if (start !== null && (first === null || start < first)) first = start;
     const modified = epoch(card.lastModified);
     if (modified !== null && (last === null || modified > last)) last = modified;
   }
-  return { firstPlayedAt: first, lastPlayedAt: last };
+  return last;
+}
+
+/** One application record from `/v3/profiles/{id}/applications`. */
+export interface PlayHistoryApplication {
+  firstSessionDate?: string | null;
+  lastSessionDate?: string | null;
+  sessionsCount?: number | null;
+}
+
+/** Play history folded across all of a player's For Honor application ids. */
+export interface PlayHistory {
+  /** Total times the game was launched, summed across platform SKUs. */
+  sessions: number | null;
+  /** Earliest session Ubisoft has on record, epoch ms. */
+  firstSessionAt: number | null;
+  /** Most recent session Ubisoft has on record, epoch ms. */
+  lastSessionAt: number | null;
+}
+
+/**
+ * Folds a player's application records into one play history.
+ *
+ * A player owns For Honor under one application id per platform SKU — a PC
+ * buyer and a crossplay PlayStation buyer carry different ids, and a
+ * long-tenured account can carry several as the game re-issued them. Each id's
+ * record is real and per-player (confirmed live: two players return different
+ * dates and counts, and re-querying the same player returns the same values,
+ * so these are stored figures, not a timestamp stamped at read time). They are
+ * combined the only way that is meaningful across SKUs: sessions add up, the
+ * first session is the earliest of any SKU, the last is the most recent.
+ *
+ * `firstSessionAt` is labelled "first session on record", not "first played":
+ * it is the earliest session Ubisoft's session service holds, which for an
+ * account that predates that service can be later than the true first match.
+ * It is still real, personal and varies per player — unlike the stat card's
+ * `startDate`, which is one pre-release constant for everyone — so it is worth
+ * showing for exactly what it is, and no more.
+ */
+export function aggregatePlayHistory(applications: PlayHistoryApplication[]): PlayHistory {
+  let sessions = 0;
+  let sessionsSeen = false;
+  let firstSessionAt: number | null = null;
+  let lastSessionAt: number | null = null;
+  for (const app of applications) {
+    if (
+      typeof app.sessionsCount === 'number' &&
+      Number.isFinite(app.sessionsCount) &&
+      app.sessionsCount >= 0
+    ) {
+      sessions += app.sessionsCount;
+      sessionsSeen = true;
+    }
+    const first = epoch(app.firstSessionDate);
+    if (first !== null) firstSessionAt = firstSessionAt === null ? first : Math.min(firstSessionAt, first);
+    const last = epoch(app.lastSessionDate);
+    if (last !== null) lastSessionAt = lastSessionAt === null ? last : Math.max(lastSessionAt, last);
+  }
+  return { sessions: sessionsSeen ? sessions : null, firstSessionAt, lastSessionAt };
 }
 
 /** The raw stat entry shape Ubisoft returns. */
@@ -106,6 +302,18 @@ export interface RawStat {
   value?: string | number;
   startDate?: string | null;
   lastModified?: string | null;
+  /**
+   * Which snapshot this value was taken from, stamped by mergeSpaceStats.
+   *
+   * A player who predates crossplay has two ledgers, and neither is a superset
+   * of the other: each counter is fullest in whichever space actually recorded
+   * it. Taking each counter's largest value is therefore right for that
+   * counter on its own — but it means two figures on the page can come from
+   * different ledgers, and then combining them is meaningless. This says which
+   * ledger a figure came from so the mapper can refuse to combine two that
+   * disagree, rather than silently inviting the subtraction.
+   */
+  spaceIndex?: number;
 }
 
 export type RawStats = Record<string, RawStat>;
@@ -361,6 +569,17 @@ export interface MappedForHonorStats {
   overview: Stat[];
   overall: Stat[];
   heroes: HeroStat[];
+  /**
+   * True when per-hero hours and per-hero match counts were taken from
+   * different platform records, so the two must not be divided into a
+   * per-match time. See where it is computed for the measurement behind it.
+   */
+  heroTimeAndMatchesSplit: boolean;
+  /**
+   * The day Ubisoft last wrote the per-hero match counts, when they come from
+   * a record it has stopped updating. Null when they are current.
+   */
+  heroMatchesAsOf: string | null;
   /** Matches played and won per game mode, where Ubisoft breaks them out. */
   gameModes: GameModeStat[];
   extraGroups: StatGroup[];
@@ -376,24 +595,125 @@ export interface MappedForHonorStats {
  * Combines the stat dictionaries of every For Honor space a player owns.
  *
  * A player who predates crossplay has stats in both a per-platform space and
- * the crossplay one, and only one of them is still written to. The freshest is
- * authoritative for every key it holds; the others may only fill in keys it
- * does not have at all — a hero played before the move to crossplay, say.
+ * the crossplay one, and neither is a superset of the other. Measured live on
+ * an account present in both: the crossplay space holds the fuller global
+ * aggregates (kills, deaths, playtime, reputation, games played), while the
+ * per-platform space holds the fuller per-mode, per-hero and matches-won
+ * counters — 9,103 Duel matches against the crossplay space's 954.
  *
- * Nothing is combined key by key. Taking the larger of each figure looked
- * appealing and was wrong: the two spaces are separate records, not a subset
- * and a superset, so max(matches played) over max(matches won) is a ratio of
- * no real scope at all. It shifted one account's Dominion win rate by two
- * points against figures that were already correct. Whatever the freshest
- * space says about a stat, it says about every stat derived from it too.
+ * Taking the freshest space wholesale therefore threw away most of the
+ * per-hero and per-mode record: it paired complete lifetime hours with a match
+ * counter that had barely been written to, so a hero showed 121 hours against
+ * 48 matches.
+ *
+ * A blanket key-by-key maximum is not the answer either, and was tried and
+ * reverted once before: it can take a ratio's numerator from one space and its
+ * denominator from the other, which is a rate of no real scope. So keys are
+ * combined by *family* instead. A family is a set of keys that only mean
+ * anything together — one mode's played and won, one hero's level, reputation
+ * and time — and a family is taken whole, from whichever space recorded more
+ * of it. Numerator and denominator can then never come from different records.
+ *
+ * Standalone counters are compared individually, and only when they are known
+ * to accumulate over an account's life. Anything else — the season, a
+ * current-season counter, a skill rating, the last match's kills — is a
+ * point-in-time value where "larger" means nothing, so the freshest space
+ * keeps it.
  */
+
+/**
+ * Standalone keys that only ever count upwards, so the larger reading is the
+ * more complete one. Deliberately an allow-list: an unrecognised key keeps the
+ * freshest space's value rather than being assumed to accumulate.
+ */
+const CUMULATIVE_KEYS = new Set([
+  'KillTotal',
+  'DeathTotal',
+  'AssistTotal',
+  'PlayersKilledanygamemode',
+  'GamesPlayedPVP',
+  'GamesPlayedPVE',
+  'GamesPlayedCustomGame',
+  'GamesPlayedPrivateMatch',
+  'TimePlayedTotal',
+  'TimePlayedPVP',
+  'Playtime',
+  'Reputation',
+  'MatchesWonwithanyHero.T_Win.1',
+  'MetaGameManualDeployCount',
+  'CampaignProgression',
+  'CampaignLastMissionCompleted',
+]);
+
+/**
+ * The family a key belongs to, and the key whose value decides which space
+ * recorded more of that family. Returns null for a standalone key.
+ */
+function familyOf(key: string): { family: string; sizedBy: string } | null {
+  let match = /^MatchesPlayedpergamemode\.S_Type\.(.+)$/.exec(key);
+  if (match) return { family: `mode:${match[1]}`, sizedBy: key };
+  match = /^MatchesWonpergamemode\.T_Win\.1\.S_Type\.(.+)$/.exec(key);
+  if (match) {
+    return {
+      family: `mode:${match[1]}`,
+      sizedBy: `MatchesPlayedpergamemode.S_Type.${match[1]}`,
+    };
+  }
+  match = /^MatchesPlayedperHero\.Hero\.Hero_(.+)$/.exec(key);
+  if (match) return { family: `hero-matches:${match[1]}`, sizedBy: key };
+  match = /^Hero(.+?)(Level|Reputation|TimePlayed)$/.exec(key);
+  if (match) return { family: `hero:${match[1]}`, sizedBy: `Hero${match[1]}TimePlayed` };
+  return null;
+}
+
+function value(entry: RawStat | undefined): number | null {
+  if (!entry || entry.value === undefined || entry.value === null || entry.value === '') return null;
+  const n = Number(entry.value);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function mergeSpaceStats(snapshots: RawStats[]): RawStats {
   const [freshest, ...rest] = snapshots;
   if (!freshest) return {};
-  const merged: RawStats = { ...freshest };
-  for (const older of rest) {
+  // Every value carries the index of the ledger it came from, so a later
+  // reader can tell whether two figures are comparable. Index 0 is the
+  // freshest snapshot, which is where an unclaimed key stays.
+  const merged: RawStats = {};
+  for (const [key, entry] of Object.entries(freshest)) merged[key] = { ...entry, spaceIndex: 0 };
+
+  // Which snapshot recorded most of each family, freshest winning a tie.
+  const bestForFamily = new Map<string, RawStats>();
+  for (const snapshot of snapshots) {
+    for (const key of Object.keys(snapshot)) {
+      const grouping = familyOf(key);
+      if (!grouping) continue;
+      const size = value(snapshot[grouping.sizedBy]);
+      if (size === null) continue;
+      const incumbent = bestForFamily.get(grouping.family);
+      const incumbentSize = incumbent ? value(incumbent[grouping.sizedBy]) : null;
+      if (incumbentSize === null || size > incumbentSize) {
+        bestForFamily.set(grouping.family, snapshot);
+      }
+    }
+  }
+
+  for (const [offset, older] of rest.entries()) {
+    const spaceIndex = offset + 1;
     for (const [key, entry] of Object.entries(older)) {
-      if (!(key in merged)) merged[key] = entry;
+      if (!(key in merged)) {
+        merged[key] = { ...entry, spaceIndex };
+        continue;
+      }
+      const grouping = familyOf(key);
+      if (grouping) {
+        // Take the whole family from the one space that recorded most of it.
+        if (bestForFamily.get(grouping.family) === older) merged[key] = { ...entry, spaceIndex };
+        continue;
+      }
+      if (!CUMULATIVE_KEYS.has(key)) continue;
+      const mine = value(entry);
+      const theirs = value(merged[key]);
+      if (mine !== null && (theirs === null || mine > theirs)) merged[key] = { ...entry, spaceIndex };
     }
   }
   return merged;
@@ -434,13 +754,37 @@ export function mapForHonorStats(
   const deaths = num(take('DeathTotal'));
   const kills = num(take('KillTotal'));
   const playersKilled = num(take('PlayersKilledanygamemode'));
+  // Whether the player-kill count and the kill total were recorded in the same
+  // ledger. When they were not, they describe different sets of matches and
+  // must not be presented as two parts of one whole.
+  const playersKilledIsComparable =
+    stats.PlayersKilledanygamemode?.spaceIndex === stats.KillTotal?.spaceIndex;
+  const playersKilledAsOf = recordedAsOf(stats, 'PlayersKilledanygamemode');
   const wins = num(take('MatchesWonwithanyHero.T_Win.1'));
+  // Same test for the lifetime win count against the match counts it is shown
+  // beside. On a real pre-crossplay account the wins come from the PC ledger
+  // (10,708) while the match totals come from the crossplay one, so dividing
+  // the two visible numbers would produce a win rate for matches that record
+  // never counted. (The win rate shown below is not computed this way — it
+  // uses the per-mode counters, which do share a scope.)
+  const winsIsComparable =
+    stats['MatchesWonwithanyHero.T_Win.1']?.spaceIndex === stats.GamesPlayedPVP?.spaceIndex;
+  const winsAsOf = recordedAsOf(stats, 'MatchesWonwithanyHero.T_Win.1');
   const reputation = num(take('Reputation'));
   const timeTotal = num(take('TimePlayedTotal'));
   const timePvp = num(take('TimePlayedPVP'));
   take('Playtime'); // Alternate playtime key; TimePlayedTotal is the one shown.
-  const campaignProgress = num(take('CampaignProgression'));
-  const campaignMission = num(take('CampaignLastMissionCompleted'));
+  // CampaignProgression is a 0-1 fraction, not a percentage already: an
+  // account whose story the game reports as "STORY PROGRESSION 100.00%"
+  // returns exactly 1 here, which the page printed as "1%". Scaled to a
+  // percentage so a finished campaign reads as finished. Clamped because a
+  // fraction is all this key has ever been observed to hold.
+  const campaignRaw = num(take('CampaignProgression'));
+  const campaignProgress =
+    campaignRaw === null ? null : Math.round(Math.min(1, Math.max(0, campaignRaw)) * 1000) / 10;
+  // Consumed so it is not counted as an undecoded key: it is decoded, and the
+  // conclusion is that it is not showable. See the overview entry below.
+  take('CampaignLastMissionCompleted');
 
   // Matchmaking rating (TrueSkill); Mu is the rating, Sigma the uncertainty.
   // TrueSkill initialises every player at mu = 25, so a mu of exactly 25 means
@@ -452,12 +796,21 @@ export function mapForHonorStats(
   const skillRating = (raw: number | null): number | null =>
     raw === null || raw === TRUESKILL_DEFAULT_MU ? null : Math.round(raw);
 
+  // Sigma is how unsure Ubisoft still is about the rating beside it: TrueSkill
+  // starts every player at a wide 8.0 and narrows it as it sees more matches,
+  // so a small sigma means the rating has been earned over many games rather
+  // than guessed from a handful. It was read and discarded; reported now as
+  // the rating's margin, which is the difference between "rated 47" and
+  // "rated 47, and confident about it".
+  const uncertainty = (raw: number | null): string | undefined =>
+    raw === null ? undefined : `± ${Math.round(raw * 10) / 10} margin`;
+
   const duelSkill = skillRating(num(take('SkillRatingDuelMu')));
-  take('SkillRatingDuelSigma');
+  const duelSigma = uncertainty(num(take('SkillRatingDuelSigma')));
   const killSkill = skillRating(num(take('SkillRatingKillMu')));
-  take('SkillRatingKillSigma');
+  const killSigma = uncertainty(num(take('SkillRatingKillSigma')));
   const objectiveSkill = skillRating(num(take('SkillRatingObjectiveMu')));
-  take('SkillRatingObjectiveSigma');
+  const objectiveSigma = uncertainty(num(take('SkillRatingObjectiveSigma')));
 
   // The season this snapshot came from. Ubisoft's stats service can lag well
   // behind live play, so this is surfaced rather than hidden.
@@ -553,20 +906,30 @@ export function mapForHonorStats(
     { key: 'total-matches', label: 'Matches played', value: totalMatches, kind: 'number' },
     { key: 'playtime', label: 'Time played', value: toHours(timeTotal), kind: 'number', note: 'Hours' },
     {
+      // Named for what it measures. This group is a profile summary, not a
+      // campaign panel, so "Completion" alone would leave a reader asking
+      // completion of what.
       key: 'campaign',
-      label: 'Completion',
+      label: 'Story completion',
       value: campaignProgress,
       kind: 'percent',
       note: 'As Ubisoft records it',
     },
-    {
-      // Ubisoft's key is CampaignLastMissionCompleted — the index of the last
-      // mission finished, not a count of missions finished.
-      key: 'campaign-mission',
-      label: 'Last mission',
-      value: campaignMission,
-      kind: 'number',
-    },
+    // There is deliberately no "Last mission" row.
+    //
+    // CampaignLastMissionCompleted is not a mission number, whatever its name
+    // suggests. Measured on two accounts the game reports as 100% story
+    // complete: one returns 0, the other 1,280,394,179 (0x4C5143C3). Two
+    // players who have both finished the story would hold the same value if
+    // this were an ordinal or an index, and a ten-digit one is not a mission
+    // either way. It reads like an opaque content identifier, and Ubisoft
+    // exposes no mission dictionary to resolve it against — a stat-name sweep
+    // found none — so decoding it would mean inventing the answer.
+    //
+    // It used to be emitted as a permanently null row, which rendered as an
+    // empty "Last mission" line on every player's page: all of the noise of a
+    // missing figure and none of the information. The key is still consumed
+    // above so it is not counted as undecoded.
   ];
 
   const overall: Stat[] = [
@@ -579,7 +942,17 @@ export function mapForHonorStats(
       label: 'Player kills',
       value: playersKilled,
       kind: 'number',
-      note: 'Excludes AI opponents',
+      // "Excludes AI opponents" is only a safe thing to say beside the kill
+      // total when both counters come from the same ledger — otherwise the
+      // note invites subtracting one from the other to get AI kills, and on a
+      // pre-crossplay account those two figures are recorded in different
+      // spaces. Measured on a real account: 81,509 kills in the crossplay
+      // ledger against 51,365 player kills in the PC one, which would imply
+      // 30,144 AI kills from two records that never counted the same matches.
+      // So the row keeps its (real) value and says where it comes from.
+      note: playersKilledIsComparable
+        ? 'Excludes AI opponents'
+        : `Excludes AI opponents. Counted on the older platform record, which Ubisoft last wrote on ${playersKilledAsOf ?? 'an earlier date'}, so it is not current and does not subtract from the kills above.`,
     },
     { key: 'kills-per-match', label: 'Kills per match', value: perMatch(kills), kind: 'ratio' },
     { key: 'deaths-per-match', label: 'Deaths per match', value: perMatch(deaths), kind: 'ratio' },
@@ -655,7 +1028,28 @@ export function mapForHonorStats(
       const row = heroRow(codename);
       if (field === 'Level') row.level = num(stats[key]);
       else if (field === 'Reputation') row.rep = num(stats[key]);
-      else row.time = num(stats[key]);
+      else {
+        row.time = num(stats[key]);
+        // When this hero was last played, from the last time their played-time
+        // counter moved.
+        //
+        // The stat card's per-hero timestamp says when that hero's REPUTATION
+        // last changed, which is a different and much rarer event: reputation
+        // ticks over only at the end of a full level cycle, so a hero played
+        // yesterday keeps whatever date they last prestiged on. Measured on a
+        // live profile, 38 of 39 heroes disagreed between the two, and the
+        // reputation date was systematically the older — Benkei last played
+        // 2026-08-30 against a reputation date of 2025-12-08, so the page was
+        // reporting a hero as untouched for nine months while it was in
+        // regular use.
+        //
+        // Time played moves every session, comes from the same merged family
+        // as the hours shown beside it, and was verified stable across
+        // repeated queries, so it is neither a read-time artefact nor from a
+        // different record than the figure it dates.
+        const played = epoch(stats[key]?.lastModified);
+        if (played !== null) row.lastPlayedAt = played;
+      }
       continue;
     }
     const matchesMatch = heroMatchesKey.exec(key);
@@ -665,6 +1059,30 @@ export function mapForHonorStats(
       heroRow(codename).matches = num(stats[key]);
     }
   }
+
+  // Whether a hero's hours and match count come from different platform
+  // records. They are separate stat families, so the merge picks each from
+  // whichever space recorded more of it — and on a pre-crossplay account that
+  // is systematically a different space for each: measured on a real profile,
+  // all twelve heroes carrying both counters drew hours from the crossplay
+  // record and matches from the PC one. Ubisoft appears to keep match counts
+  // on the platform record and elapsed time on the crossplay record, so both
+  // values are the fullest available for their own counter and neither is
+  // wrong — but dividing one by the other yields a per-match time for matches
+  // that record never timed. The section says so rather than letting a reader
+  // do that arithmetic silently.
+  let heroMatchesAsOf: string | null = null;
+  const heroTimeAndMatchesSplit = [...heroMap.keys()].length > 0 &&
+    Object.keys(stats).some((key) => {
+      const matchesMatch = heroMatchesKey.exec(key);
+      if (!matchesMatch) return false;
+      const timeKey = `Hero${matchesMatch[1]}TimePlayed`;
+      const time = stats[timeKey];
+      if (!time || stats[key]?.spaceIndex === undefined || time.spaceIndex === undefined) return false;
+      if (stats[key].spaceIndex === time.spaceIndex) return false;
+      heroMatchesAsOf = heroMatchesAsOf ?? recordedAsOf(stats, key);
+      return true;
+    });
 
   // Names produced by heroRow() are keyed by resolved hero name, so the
   // original raw codename is gone here — Map.entries() below yields
@@ -726,7 +1144,20 @@ export function mapForHonorStats(
     { key: 'gt-pve', label: 'Versus AI', value: pve, kind: 'number' },
     { key: 'gt-custom', label: 'Custom', value: custom, kind: 'number' },
     { key: 'gt-private', label: 'Private', value: priv, kind: 'number' },
-    { key: 'wins', label: 'Matches won', value: wins, kind: 'number' },
+    {
+      // Scoped explicitly, because this number and the win rate under it do
+      // not share a denominator and a reader will otherwise try to divide one
+      // by the other. This is Ubisoft's lifetime win counter across every
+      // mode; the rate below is computed only from the modes Ubisoft breaks
+      // down (Duel and Dominion), which is why the wins behind it are fewer.
+      key: 'wins',
+      label: 'Matches won',
+      value: wins,
+      kind: 'number',
+      note: winsIsComparable
+        ? 'All modes, lifetime'
+        : `All modes, as Ubisoft last recorded it on ${winsAsOf ?? 'an earlier date'} — the older platform record, so it is not current and does not divide into the matches above.`,
+    },
     {
       key: 'win-rate',
       label: 'Win rate',
@@ -778,9 +1209,9 @@ export function mapForHonorStats(
     'matchmaking',
     'Matchmaking ratings',
     [
-      { key: 'duel-skill', label: 'Duel', value: duelSkill, kind: 'number' },
-      { key: 'kill-skill', label: 'Kills', value: killSkill, kind: 'number' },
-      { key: 'objective-skill', label: 'Objectives', value: objectiveSkill, kind: 'number' },
+      { key: 'duel-skill', label: 'Duel', value: duelSkill, kind: 'number', ...(duelSkill !== null && duelSigma ? { note: duelSigma } : {}) },
+      { key: 'kill-skill', label: 'Kills', value: killSkill, kind: 'number', ...(killSkill !== null && killSigma ? { note: killSigma } : {}) },
+      { key: 'objective-skill', label: 'Objectives', value: objectiveSkill, kind: 'number', ...(objectiveSkill !== null && objectiveSigma ? { note: objectiveSigma } : {}) },
     ],
     'What Ubisoft matches you on internally. It is not the Ranked Duel rank shown in game, and a player who has never been rated in a category simply has no number here.',
   );
@@ -805,7 +1236,17 @@ export function mapForHonorStats(
     'The territory battle between Knights, Vikings, Samurai and Wu Lin. Deploying war assets on its map is how a player takes part.',
   );
 
-  return { season: metaSeason, overview, overall, heroes, gameModes, extraGroups, undecoded };
+  return {
+    season: metaSeason,
+    overview,
+    overall,
+    heroes,
+    heroTimeAndMatchesSplit,
+    heroMatchesAsOf,
+    gameModes,
+    extraGroups,
+    undecoded,
+  };
 }
 
 /** One entry of Ubisoft's `GET /v2/profiles?userId=` response. */

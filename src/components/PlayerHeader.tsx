@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { PlatformLink, PlayerReport, Stat } from '@/shared/types';
-import { formatStatValue, relativeTime, LOCALE } from '@/shared/format';
+import { formatStatValue, formatDate, relativeTime, LOCALE } from '@/shared/format';
 import { factionStyle } from '@/shared/faction';
 import { PlatformMark } from './PlatformMark';
 import { RefreshButton } from './RefreshButton';
@@ -33,11 +33,6 @@ interface Tile {
   /** 0–100 fill for the rail under the value, when a fraction is meaningful. */
   meter?: number | null;
   accent?: string;
-}
-
-/** "Aug 2016", for a start date where the day adds nothing. */
-function monthYear(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(LOCALE, { year: 'numeric', month: 'long' });
 }
 
 /**
@@ -130,8 +125,12 @@ export function PlayerHeader({ report, username }: { report: PlayerReport; usern
             ))}
           </div>
 
-          {/* When they started, when they last played, and when we last looked
-              — three different times that were all missing before. */}
+          {/* When they last played, the first session on record, and when we
+              last looked. "First session" is deliberately not "playing since":
+              it is the earliest session Ubisoft's service holds, which is real
+              and personal but can be later than an old account's true first
+              match — unlike the stat card's startDate, one pre-release constant
+              for everyone, which is why that one is not shown at all. */}
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-dim">
             {report.lastPlayedAt ? (
               <span
@@ -143,10 +142,14 @@ export function PlayerHeader({ report, username }: { report: PlayerReport; usern
                 <span className="text-ink">{relativeTime(report.lastPlayedAt)}</span>
               </span>
             ) : null}
-            {report.firstPlayedAt ? (
-              <span>
-                Playing since{' '}
-                <span className="text-ink">{monthYear(report.firstPlayedAt)}</span>
+            {report.firstSessionAt ? (
+              <span
+                title={`The earliest For Honor session Ubisoft has on record for this account: ${new Date(
+                  report.firstSessionAt,
+                ).toLocaleString(LOCALE)}. This is when Ubisoft's session service first saw them, which can be later than when they actually started.`}
+              >
+                First session{' '}
+                <span className="text-ink">{formatDate(report.firstSessionAt)}</span>
               </span>
             ) : null}
             <span className="text-ink-faint">
