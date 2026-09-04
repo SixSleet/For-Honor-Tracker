@@ -42,6 +42,32 @@ import { heroIdentity } from '../../shared/hero-roster.ts';
  * application id — both are already read, so there is no third space holding
  * the remainder. What this file maps is therefore everything the public API
  * has to give; anything still missing is missing upstream.
+ *
+ * The endpoint surface was swept the same way (/api/diagnostics?probePaths=),
+ * with the same result. Confirmed against Ubisoft's public service:
+ *
+ *   - /v1/profiles/{id}/actions?spaceId=<hero>  and  /rewards?spaceId=<hero>
+ *     return 200 with real-looking For Honor content — Ubisoft Club
+ *     challenges ("Warden Initiate") and rewards ("Battle Pack"). But it is
+ *     the catalogue, not the player: two different players' responses are
+ *     byte-for-byte identical apart from the profile id echoed back and a
+ *     completionDate/purchaseDate equal to the moment of the request. Every
+ *     record reads value 0, xp 0, never actually completed. Not shipped: it
+ *     would present the same list on every page as if it were personal.
+ *   - /v1/profiles/{id}/leaderboards?spaceId=<crossplay> returns 200 with a
+ *     catalogue of leaderboard definitions — including
+ *     RankingPointsPerGameModeSeasonal.gameMode.R_DL2 ("Ranked leaderboard
+ *     for ranked duel"). So the Ranked Duel rank is a real concept in the
+ *     leaderboards service — but only its definition is reachable. Asking
+ *     /v1/profiles/stats for that statName returns nothing, and every
+ *     per-player leaderboard record route (/leaderboards/<name>,
+ *     /leaderboards/<name>/records, …) is 404. The number itself is served
+ *     by the game's own title-auth endpoints (herologin/heroranking), which
+ *     this project does not call: reaching them means presenting a game
+ *     build id and sandbox headers, i.e. impersonating the client.
+ *   - badges, wallets, friends, clubs, units, progressions, playtime, titles
+ *     (profile-scoped) and products, configuration (space-scoped) are all 404
+ *     — routes that do not exist on this service for this game.
  */
 
 /**
