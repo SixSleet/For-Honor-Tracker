@@ -221,6 +221,18 @@ export interface RawStat {
   value?: string | number;
   startDate?: string | null;
   lastModified?: string | null;
+  /**
+   * Which snapshot this value was taken from, stamped by mergeSpaceStats.
+   *
+   * A player who predates crossplay has two ledgers, and neither is a superset
+   * of the other: each counter is fullest in whichever space actually recorded
+   * it. Taking each counter's largest value is therefore right for that
+   * counter on its own — but it means two figures on the page can come from
+   * different ledgers, and then combining them is meaningless. This says which
+   * ledger a figure came from so the mapper can refuse to combine two that
+   * disagree, rather than silently inviting the subtraction.
+   */
+  spaceIndex?: number;
 }
 
 export type RawStats = Record<string, RawStat>;
@@ -571,7 +583,11 @@ function value(entry: RawStat | undefined): number | null {
 export function mergeSpaceStats(snapshots: RawStats[]): RawStats {
   const [freshest, ...rest] = snapshots;
   if (!freshest) return {};
-  const merged: RawStats = { ...freshest };
+  // Every value carries the index of the ledger it came from, so a later
+  // reader can tell whether two figures are comparable. Index 0 is the
+  // freshest snapshot, which is where an unclaimed key stays.
+  const merged: RawStats = {};
+  for (const [key, entry] of Object.entries(freshest)) merged[key] = { ...entry, spaceIndex: 0 };
 
   // Which snapshot recorded most of each family, freshest winning a tie.
   const bestForFamily = new Map<string, RawStats>();
@@ -589,22 +605,23 @@ export function mergeSpaceStats(snapshots: RawStats[]): RawStats {
     }
   }
 
-  for (const older of rest) {
+  for (const [offset, older] of rest.entries()) {
+    const spaceIndex = offset + 1;
     for (const [key, entry] of Object.entries(older)) {
       if (!(key in merged)) {
-        merged[key] = entry;
+        merged[key] = { ...entry, spaceIndex };
         continue;
       }
       const grouping = familyOf(key);
       if (grouping) {
         // Take the whole family from the one space that recorded most of it.
-        if (bestForFamily.get(grouping.family) === older) merged[key] = entry;
+        if (bestForFamily.get(grouping.family) === older) merged[key] = { ...entry, spaceIndex };
         continue;
       }
       if (!CUMULATIVE_KEYS.has(key)) continue;
       const mine = value(entry);
       const theirs = value(merged[key]);
-      if (mine !== null && (theirs === null || mine > theirs)) merged[key] = entry;
+      if (mine !== null && (theirs === null || mine > theirs)) merged[key] = { ...entry, spaceIndex };
     }
   }
   return merged;
@@ -645,7 +662,20 @@ export function mapForHonorStats(
   const deaths = num(take('DeathTotal'));
   const kills = num(take('KillTotal'));
   const playersKilled = num(take('PlayersKilledanygamemode'));
+  // Whether the player-kill count and the kill total were recorded in the same
+  // ledger. When they were not, they describe different sets of matches and
+  // must not be presented as two parts of one whole.
+  const playersKilledIsComparable =
+    stats.PlayersKilledanygamemode?.spaceIndex === stats.KillTotal?.spaceIndex;
   const wins = num(take('MatchesWonwithanyHero.T_Win.1'));
+  // Same test for the lifetime win count against the match counts it is shown
+  // beside. On a real pre-crossplay account the wins come from the PC ledger
+  // (10,708) while the match totals come from the crossplay one, so dividing
+  // the two visible numbers would produce a win rate for matches that record
+  // never counted. (The win rate shown below is not computed this way — it
+  // uses the per-mode counters, which do share a scope.)
+  const winsIsComparable =
+    stats['MatchesWonwithanyHero.T_Win.1']?.spaceIndex === stats.GamesPlayedPVP?.spaceIndex;
   const reputation = num(take('Reputation'));
   const timeTotal = num(take('TimePlayedTotal'));
   const timePvp = num(take('TimePlayedPVP'));
@@ -818,7 +848,17 @@ export function mapForHonorStats(
       label: 'Player kills',
       value: playersKilled,
       kind: 'number',
-      note: 'Excludes AI opponents',
+      // "Excludes AI opponents" is only a safe thing to say beside the kill
+      // total when both counters come from the same ledger — otherwise the
+      // note invites subtracting one from the other to get AI kills, and on a
+      // pre-crossplay account those two figures are recorded in different
+      // spaces. Measured on a real account: 81,509 kills in the crossplay
+      // ledger against 51,365 player kills in the PC one, which would imply
+      // 30,144 AI kills from two records that never counted the same matches.
+      // So the row keeps its (real) value and says where it comes from.
+      note: playersKilledIsComparable
+        ? 'Excludes AI opponents'
+        : 'Excludes AI opponents. Counted on a different platform record from the kills above, so the two do not subtract.',
     },
     { key: 'kills-per-match', label: 'Kills per match', value: perMatch(kills), kind: 'ratio' },
     { key: 'deaths-per-match', label: 'Deaths per match', value: perMatch(deaths), kind: 'ratio' },
@@ -975,7 +1015,9 @@ export function mapForHonorStats(
       label: 'Matches won',
       value: wins,
       kind: 'number',
-      note: 'All modes, lifetime',
+      note: winsIsComparable
+        ? 'All modes, lifetime'
+        : 'All modes, lifetime. Counted on a different platform record from the matches above, so the two do not divide.',
     },
     {
       key: 'win-rate',

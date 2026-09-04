@@ -746,6 +746,53 @@ test('last played is the newest stat change, and no start date is inferred', () 
   assert.equal(lastPlayedFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), null);
 });
 
+test('figures from different platform ledgers are never presented as subtractable', () => {
+  // Measured live on a pre-crossplay account. Neither space is a superset:
+  // the crossplay ledger holds the fuller kill total, the PC ledger the fuller
+  // player-kill and win counts, so taking each counter's largest value is
+  // right for that counter — and leaves two figures on one page that were
+  // never counted over the same matches.
+  const merged = mergeSpaceStats([
+    // Freshest: crossplay.
+    { KillTotal: s(81509), PlayersKilledanygamemode: s(10418), GamesPlayedPVP: s(22026), 'MatchesWonwithanyHero.T_Win.1': s(1875) },
+    // Older: PC.
+    { KillTotal: s(53216), PlayersKilledanygamemode: s(51365), GamesPlayedPVP: s(14895), 'MatchesWonwithanyHero.T_Win.1': s(10708) },
+  ]);
+  // Each counter keeps its fullest value, from whichever ledger recorded it.
+  assert.equal(merged.KillTotal.value, '81509');
+  assert.equal(merged.PlayersKilledanygamemode.value, '51365');
+  assert.equal(merged['MatchesWonwithanyHero.T_Win.1'].value, '10708');
+  // And each says which ledger that was.
+  assert.equal(merged.KillTotal.spaceIndex, 0);
+  assert.equal(merged.PlayersKilledanygamemode.spaceIndex, 1);
+
+  const mapped = mapForHonorStats(merged);
+  // 81,509 kills above 51,365 player kills would imply 30,144 AI kills from
+  // two records that never counted the same matches, so the row says so.
+  const players = mapped.overall.find((x) => x.key === 'players-killed');
+  assert.equal(players?.value, 51365);
+  assert.match(String(players?.note), /different platform record/i);
+  const wins = mapped.extraGroups
+    .find((g) => g.key === 'matches-by-type')
+    ?.stats.find((x) => x.key === 'wins');
+  assert.match(String(wins?.note), /different platform record/i);
+});
+
+test('a figure recorded in the same ledger as its neighbour is left plainly stated', () => {
+  // The caveat must appear only when it is true, or it becomes noise on every
+  // page. A single-space account has one ledger and nothing to warn about.
+  const mapped = mapForHonorStats(
+    mergeSpaceStats([
+      { KillTotal: s(81509), PlayersKilledanygamemode: s(70000), GamesPlayedPVP: s(22026), 'MatchesWonwithanyHero.T_Win.1': s(10708) },
+    ]),
+  );
+  assert.equal(mapped.overall.find((x) => x.key === 'players-killed')?.note, 'Excludes AI opponents');
+  assert.equal(
+    mapped.extraGroups.find((g) => g.key === 'matches-by-type')?.stats.find((x) => x.key === 'wins')?.note,
+    'All modes, lifetime',
+  );
+});
+
 test('play history folds sessions across SKUs: sum count, earliest first, latest last', () => {
   // The real shape returned for a crossplay PlayStation player: two For Honor
   // application ids, each with its own stored first/last session and count.
