@@ -240,7 +240,7 @@ import {
   heroFactsFromStatCard,
   mapForHonorStats,
   mergeSpaceStats,
-  playedRangeFromStatCard,
+  lastPlayedFromStatCard,
 } from '../src/server/providers/forhonor-ubisoft-stats.ts';
 import type { RawStats } from '../src/server/providers/forhonor-ubisoft-stats.ts';
 import {
@@ -722,21 +722,21 @@ test('the roster\u2019s name is kept when Ubisoft\u2019s label is a shorter form
   assert.ok(mapped.heroes[0].portraitUrl);
 });
 
-test('first and last played come from the stat card\u2019s own timestamps', () => {
-  const range = playedRangeFromStatCard([
+test('last played is the newest stat change, and no start date is inferred', () => {
+  // startDate is when Ubisoft defined the counter, not when this account
+  // started playing: it reads 2016-10-29 on every profile, months before For
+  // Honor released. Only lastModified says anything about this player, so the
+  // card yields a last-played and deliberately no first-played counterpart.
+  const cards = [
     { statName: 'CampaignProgression', startDate: '2016-10-29T00:43:00.000Z', lastModified: '2025-09-11T16:26:46.962Z' },
     { statName: 'Reputation', startDate: '2016-10-29T00:45:00.000Z', lastModified: '2026-08-31T17:31:43.196Z' },
     { statName: 'KillTotal', startDate: '2016-10-29T01:08:00.000Z', lastModified: '2026-08-31T17:31:43.196Z' },
-  ]);
-  assert.equal(range.firstPlayedAt, Date.parse('2016-10-29T00:43:00.000Z'));
-  assert.equal(range.lastPlayedAt, Date.parse('2026-08-31T17:31:43.196Z'));
+  ];
+  assert.equal(lastPlayedFromStatCard(cards), Date.parse('2026-08-31T17:31:43.196Z'));
 
   // Nothing usable in, nothing invented out.
-  assert.deepEqual(playedRangeFromStatCard([]), { firstPlayedAt: null, lastPlayedAt: null });
-  assert.deepEqual(playedRangeFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), {
-    firstPlayedAt: null,
-    lastPlayedAt: null,
-  });
+  assert.equal(lastPlayedFromStatCard([]), null);
+  assert.equal(lastPlayedFromStatCard([{ statName: 'X', startDate: '', lastModified: null }]), null);
 });
 
 test('play sessions and average session come from the play-history count', () => {
@@ -808,16 +808,26 @@ test('an older space fills gaps only; it never overrides the current snapshot', 
   };
 
   const merged = mergeSpaceStats([live, frozen]);
+  // Globals still come from the live snapshot.
   assert.equal(merged.Reputation.value, '697');
   assert.equal(merged.MetaGameSeason.value, '38');
   assert.equal(merged.Faction.value, 'vk');
-  // The pair stays internally consistent, so the derived rate stays true.
-  assert.equal(merged['MatchesPlayedpergamemode.S_Type.DMN'].value, '1368');
-  assert.equal(merged['MatchesWonpergamemode.T_Win.1.S_Type.DMN'].value, '996');
+
+  // The mode counters are taken as a whole family from whichever space
+  // recorded more of that mode — here the frozen one, which holds 1600
+  // matches against the live snapshot's 1368. What matters is not which side
+  // wins but that BOTH halves come from the same side: a rate may never take
+  // its played count from one record and its win count from the other.
+  const played = merged['MatchesPlayedpergamemode.S_Type.DMN'].value;
+  const won = merged['MatchesWonpergamemode.T_Win.1.S_Type.DMN'].value;
+  assert.ok(
+    (played === '1600' && won === '900') || (played === '1368' && won === '996'),
+    `played ${played} and won ${won} came from different records`,
+  );
   const rate = mapForHonorStats(merged).extraGroups
     .find((group) => group.key === 'matches-by-type')
     ?.stats.find((stat) => stat.key === 'win-rate')?.value;
-  assert.equal(rate, Math.round((996 / 1368) * 1000) / 10);
+  assert.equal(rate, Math.round((Number(won) / Number(played)) * 1000) / 10);
 
   // The hero only the old space knows about still survives.
   assert.equal(merged.HeroKnightChampionReputation.value, '9');
@@ -826,15 +836,18 @@ test('an older space fills gaps only; it never overrides the current snapshot', 
 });
 
 test('the campaign figures are labelled for what Ubisoft actually stores', () => {
-  // CampaignLastMissionCompleted is the index of the last mission finished,
-  // not a count of missions finished, and it was labelled as the latter.
+  // The overview is a profile summary, of which story completion is one row,
+  // so that row names its own subject rather than saying "Completion" of an
+  // unstated thing. And CampaignLastMissionCompleted is not a mission number:
+  // two accounts the game reports as 100% complete return 0 and 1,280,394,179,
+  // so it is an opaque id and gets no row at all rather than an empty one.
   const mapped = mapForHonorStats({
     CampaignProgression: s(1),
     CampaignLastMissionCompleted: s(0),
   });
   const labels = Object.fromEntries(mapped.overview.map((x) => [x.key, x.label]));
-  assert.equal(labels.campaign, 'Completion');
-  assert.equal(labels['campaign-mission'], 'Last mission');
+  assert.equal(labels.campaign, 'Story completion');
+  assert.equal(labels['campaign-mission'], undefined);
 });
 
 test('a section that needs explaining carries its explanation', () => {
