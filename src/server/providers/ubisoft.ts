@@ -1033,17 +1033,26 @@ export const ubisoftProvider: DataProvider = {
       },
       matches: {
         availability: 'dead',
-        // Corrected on evidence. The old claim was that no replacement endpoint
-        // existed; one does. Ubisoft's SDK URL catalogue (readable at
-        // /v1/spaces/{spaceId}/parameters, under us-sdkClientUrls) names
-        // profiles/{profileId}/matches, and that route is live — it answers
-        // 401 errorCode 1510, "The given profileId does not match the ticket."
-        // So match history is not gone, it is private: the service returns it
-        // only to the account whose own session is asking. A tracker that
-        // looks up other players cannot read it for them, and this project
-        // will not try to get around an authorisation boundary to do so.
+        // Ubisoft's SDK URL catalogue (/v1/spaces/{spaceId}/parameters, under
+        // us-sdkClientUrls) does name profiles/{profileId}/matches, and that
+        // route is live: it answers 401 errorCode 1510, "The given profileId
+        // does not match the ticket", for another player, and drops to a 400
+        // for the ticket's own profile. So it is real and ticket-scoped.
+        //
+        // But it is not a history archive, and an earlier version of this note
+        // wrongly said it was. The catalogue lists that exact URL twice — as
+        // profilesMatches AND profilesMatchmakingMatches — and its neighbours
+        // are profilesMatchmakingOnlineAccess and matches/precise/{client,match}state.
+        // Its errors carry errorContext "match" and complain about "a property
+        // in the request body". That is the matchmaking service, the one that
+        // puts a player into a game, not a record of games already played.
+        // Every query shape tried against it returned the same generic 400.
+        //
+        // So the honest position is the original one: no readable match-history
+        // endpoint has been found. Signing a player in would not change that,
+        // because the thing login would unlock is matchmaking state.
         explanation:
-          'Ubisoft does keep per-match history, but it only serves it to the account that is signed in — asking for another player’s returns "the given profileId does not match the ticket". So no tracker can show it for the player you searched. The older game-forhonor.ubisoft.com site that used to show it publicly is gone.',
+          'No match history is available. The public site that used to show it (game-forhonor.ubisoft.com) is gone, and nothing in Ubisoft’s current service list replaces it — the one endpoint named "matches" belongs to matchmaking, which is about joining a game rather than recording finished ones.',
         items: [],
       },
       achievements: {

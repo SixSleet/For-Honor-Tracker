@@ -89,10 +89,17 @@ import { formatDate } from '../../shared/format.ts';
  * through the ones that could carry player data settles the two absences this
  * report has to explain, and neither is a missing endpoint:
  *
- *   - profiles/{profileId}/matches EXISTS and is live. It answers 401
- *     errorCode 1510, "The given profileId does not match the ticket": match
- *     history is served only to the account doing the asking. It is private,
- *     not decommissioned, and a tracker cannot read it for a searched player.
+ *   - profiles/{profileId}/matches EXISTS and is ticket-scoped: 401 errorCode
+ *     1510, "The given profileId does not match the ticket", for anyone else,
+ *     and a 400 for the ticket's own profile. It is NOT match history, though
+ *     its name invites that reading. The catalogue lists the same URL twice,
+ *     as profilesMatches and profilesMatchmakingMatches, its neighbours are
+ *     profilesMatchmakingOnlineAccess and matches/precise/{client,match}state,
+ *     and its errors carry errorContext "match" while asking for "a property
+ *     in the request body". It is the matchmaking service — joining a game,
+ *     not recording finished ones — and every query shape tried returned the
+ *     same generic 400. No readable match-history endpoint has been found,
+ *     and signing a player in would not produce one.
  *   - profiles/{profileId}/playerAchievements likewise exists and answers 403
  *     errorCode 4, "The provided profileId must belong to the user's ticket".
  *     So Ubisoft does hold achievements and will not release another player's;
