@@ -166,7 +166,7 @@ async function login(trace: TraceCollector): Promise<Session> {
  * fronted by the bot check (only the initial credential/anonymous login is).
  * So a session seeded from one browser-captured ticket renews itself
  * indefinitely, as long as each refresh lands before the current ticket
- * expires — which on-request renewal and the hourly cron both ensure.
+ * expires — which on-request renewal and the scheduled refresh both ensure.
  *
  * Carries the remember-me ticket forward untouched as a secondary fallback.
  */
