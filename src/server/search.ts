@@ -50,8 +50,6 @@ export async function searchPlayer(
 
   let lastError: ProviderError | null = null;
 
-  /** Providers that searched and genuinely found nobody, rather than breaking. */
-  const searchedCleanly: string[] = [];
 
   // A provider that finds the player but returns nothing about them is not a
   // better answer than the next provider — it just gets there first. Such a
@@ -61,7 +59,6 @@ export async function searchPlayer(
   for (const provider of providers) {
     try {
       const identity = await provider.getPlayerByUsername(query, trace);
-      searchedCleanly.push(provider.info.id);
       if (!identity) continue;
       const report = await provider.getPlayerReport(identity, trace);
       if (!hasAnything(report)) {
@@ -90,10 +87,22 @@ export async function searchPlayer(
     return withDiagnostics({ ok: true, data: thinReport });
   }
 
-  // Nothing searched successfully, so this is an outage, not a missing player.
-  // The provider's own message can name internal configuration, so a plain,
-  // visitor-safe message is returned instead of the raw provider text.
-  if (searchedCleanly.length === 0 && lastError) {
+  // If ANY provider broke, this is an outage rather than a missing player.
+  //
+  // It used to require that every provider had broken, which sounds equivalent
+  // and is not: the providers do not search the same population. Only the
+  // Ubisoft provider can resolve a Ubisoft username, so when its session
+  // expired the Steam provider still "searched cleanly", found nobody as it
+  // always would, and the search reported "we couldn't find a player with that
+  // username — check your spelling" for players who plainly exist. Telling a
+  // visitor they typed their own name wrong because a server-side credential
+  // lapsed is the worst answer available.
+  //
+  // A provider that threw might have been the one holding the answer, so the
+  // honest report is that the lookup could not be completed. The provider's
+  // own message can name internal configuration, so a plain, visitor-safe
+  // message is returned instead of the raw provider text.
+  if (lastError) {
     return withDiagnostics({
       ok: false,
       code: lastError.code,
