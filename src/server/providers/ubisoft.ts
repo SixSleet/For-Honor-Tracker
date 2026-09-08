@@ -66,8 +66,26 @@ let cachedSession: Session | null = null;
  *
  * Visitors never authenticate. This is entirely operator-side.
  */
-// Renew this far ahead of expiry so a live request never races a dying ticket.
-const RENEW_MARGIN_MS = 5 * 60_000;
+// How far ahead of expiry a request should renew the session.
+//
+// This was five minutes, which only ever renewed at the last moment. Ubisoft
+// issues tickets that live two to three hours, so on a quiet site the ticket
+// would simply expire between visitors and the next arrival would find it
+// already dead — recoverable only through remember-me, and a remember-me
+// ticket that is never exercised goes stale too. That is exactly how this
+// site went down for three days.
+//
+// An hour means any visitor in the final third of a ticket's life slides it
+// forward, so ordinary traffic alone keeps the session alive. It is safe to be
+// this eager only because a failed renewal no longer discards a ticket that
+// still works — see the fallback at the end of the stored-session branch.
+const RENEW_MARGIN_MS = 60 * 60_000;
+
+/**
+ * How much life a ticket must still have for it to be worth using when
+ * renewal has just failed. Enough to finish the request in hand.
+ */
+const USABLE_MARGIN_MS = 60_000;
 
 async function login(trace: TraceCollector): Promise<Session> {
   if (cachedSession && cachedSession.expiresAt > Date.now() + RENEW_MARGIN_MS) return cachedSession;
@@ -113,7 +131,22 @@ async function login(trace: TraceCollector): Promise<Session> {
         return cachedSession;
       }
     }
-    // Could not renew at all — surface an actionable "re-seed" message.
+    // Renewal failed — but that is not the same as having no session. With a
+    // renewal margin of an hour, a ticket that failed to slide can still have
+    // most of an hour of real life left, and throwing here would take the site
+    // down while a perfectly good credential sat in the store. Use it, and let
+    // the next request (or the cron) try renewing again.
+    if (stored.expiresAt > Date.now() + USABLE_MARGIN_MS) {
+      cachedSession = {
+        ticket: stored.ticket,
+        sessionId: stored.sessionId,
+        profileId: stored.profileId,
+        expiresAt: stored.expiresAt,
+      };
+      return cachedSession;
+    }
+
+    // Genuinely out of road: renewal failed and the ticket is spent.
     throw new ProviderError(
       'PROVIDER_UNAVAILABLE',
       'The Ubisoft session has expired and could not be renewed automatically.',
@@ -133,7 +166,7 @@ async function login(trace: TraceCollector): Promise<Session> {
  * fronted by the bot check (only the initial credential/anonymous login is).
  * So a session seeded from one browser-captured ticket renews itself
  * indefinitely, as long as each refresh lands before the current ticket
- * expires — which on-request renewal and the daily cron both ensure.
+ * expires — which on-request renewal and the hourly cron both ensure.
  *
  * Carries the remember-me ticket forward untouched as a secondary fallback.
  */
