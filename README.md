@@ -94,6 +94,36 @@ The report can contain:
 - linked platforms;
 - Steam achievements when a readable Steam profile is available.
 
+## Keeping the Ubisoft session alive
+
+Ubisoft issues the session ticket the whole site runs on, and it lasts about
+two hours. Something has to renew it more often than that, or the session
+lapses, every lookup falls back to Steam-only data, and it takes a manual
+re-seed to recover.
+
+`GET /api/ubisoft-refresh` does the renewal. It takes `CRON_SECRET` either as
+`Authorization: Bearer <secret>` or as `?token=<secret>`, and returns 200 when
+the session is healthy and 503 when it needs re-seeding, so any scheduler that
+watches HTTP status doubles as the alarm.
+
+Three layers drive it, in order of how much they can be relied on:
+
+1. **An external pinger** every 30-60 minutes — a free cron-job.org or
+   UptimeRobot monitor pointed at
+   `https://<domain>/api/ubisoft-refresh?token=<CRON_SECRET>`. No dormancy
+   rules, and it emails on failure. This is the one that keeps the site up.
+2. **`.github/workflows/keep-session-alive.yml`**, every 30 minutes, needing
+   only a `CRON_SECRET` repository secret. Note that GitHub disables scheduled
+   workflows in a public repo after 60 days without repository activity.
+3. **Vercel Cron** (`vercel.json`), daily. Too infrequent to keep the session
+   alive on its own — the Hobby plan will not accept a shorter schedule — but
+   it is a floor, and it is what catches a session that everything else missed.
+
+Use `CRON_SECRET` for the scheduled callers and never `DIAGNOSTICS_TOKEN`. A
+URL handed to a third-party service lives in that service's settings and its
+request logs; `CRON_SECRET` can trigger nothing but this idempotent refresh,
+while `DIAGNOSTICS_TOKEN` can also seed or clear the shared session.
+
 ## Known limitations
 
 The tracker does not invent data that the upstream APIs do not provide.

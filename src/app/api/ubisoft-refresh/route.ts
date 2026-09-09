@@ -11,11 +11,17 @@ export const dynamic = 'force-dynamic';
 
 const { forceRefresh } = __internal;
 
-function bearerOk(header: string | null, expected: string): boolean {
-  const token = header?.replace(/^Bearer\s+/i, '') ?? '';
-  const a = Buffer.from(token);
+/** Constant-time compare that does not leak the expected value's length. */
+function secretOk(candidate: string | null, expected: string | null): boolean {
+  if (!expected || candidate === null) return false;
+  const a = Buffer.from(candidate);
   const b = Buffer.from(expected);
   return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
+}
+
+function bearer(header: string | null): string | null {
+  if (!header) return null;
+  return header.replace(/^Bearer\s+/i, '');
 }
 
 /**
@@ -23,26 +29,36 @@ function bearerOk(header: string | null, expected: string): boolean {
  * once-seeded session keep serving everyone with no login and no periodic
  * hand-holding.
  *
- * Vercel Cron calls this on a schedule (it presents Authorization: Bearer
- * CRON_SECRET). Each run renews the session via remember-me, extending its
- * life, and writes it back to the shared store. On-request renewal already
- * covers the short 2-hour ticket; this proactive pass keeps the long-lived
- * remember-me ticket exercised so it does not lapse from disuse, and catches
- * trouble early.
+ * Each run slides the session forward and writes it back to the shared store.
+ * The ticket Ubisoft issues lasts about two hours, so this has to run more
+ * often than that or the session lapses and the site falls back to Steam data
+ * until someone re-seeds by hand. That is exactly how it went down once.
+ *
+ * Vercel Cron on the Hobby plan will only run this daily, which is not often
+ * enough, so the schedule that actually keeps the session alive is an external
+ * hourly pinger. Two callers, therefore, and two ways to authorize:
+ *
+ *   - Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`.
+ *   - An external pinger fetches a plain URL, so it sends `?token=<secret>`.
+ *
+ * The query form deliberately accepts CRON_SECRET as well as DIAGNOSTICS_TOKEN.
+ * A URL handed to a third-party scheduler lives in that service's settings and
+ * its request logs, so it should carry the least dangerous secret that will do
+ * the job: CRON_SECRET authorizes nothing but this idempotent refresh, whereas
+ * DIAGNOSTICS_TOKEN also authorizes seeding and clearing the session. Use
+ * CRON_SECRET for anything long-lived; the diagnostics token stays accepted
+ * only for a one-off manual run.
  *
  * The operator is pinged (if ALERT_WEBHOOK_URL is set) ONLY when a re-seed is
  * genuinely required. A healthy run is silent.
  */
 export async function GET(request: Request) {
-  // Accept the Vercel Cron secret, or the diagnostics token for a manual run.
   const authHeader = request.headers.get('authorization');
   const queryToken = new URL(request.url).searchParams.get('token');
   const authorized =
-    (env.cronSecret && bearerOk(authHeader, env.cronSecret)) ||
-    (env.diagnosticsToken &&
-      queryToken !== null &&
-      queryToken.length === env.diagnosticsToken.length &&
-      timingSafeEqual(Buffer.from(queryToken), Buffer.from(env.diagnosticsToken)));
+    secretOk(bearer(authHeader), env.cronSecret) ||
+    secretOk(queryToken, env.cronSecret) ||
+    secretOk(queryToken, env.diagnosticsToken);
 
   if (!authorized) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });

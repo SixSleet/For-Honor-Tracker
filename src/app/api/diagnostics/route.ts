@@ -75,6 +75,10 @@ export async function GET(request: Request) {
         vercelBranch: process.env.VERCEL_GIT_COMMIT_REF ?? null,
         diagnosticsEnabled: env.diagnosticsEnabled,
         diagnosticsTokenConfigured: Boolean(env.diagnosticsToken),
+        // Whether the scheduled refresh can be authorized at all. Without
+        // it neither Vercel Cron nor the external hourly pinger can keep
+        // the Ubisoft session alive, and the session quietly lapses.
+        cronSecretConfigured: Boolean(env.cronSecret),
         cacheTtlSeconds: env.cacheTtlMs / 1000,
         rateLimitPerMinute: env.rateLimitPerMinute,
         steamApiKeyConfigured: Boolean(env.steamApiKey),

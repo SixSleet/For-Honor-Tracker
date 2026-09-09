@@ -1,0 +1,55 @@
+# Keeps the shared Ubisoft session alive.
+#
+# The ticket Ubisoft issues lasts about two hours. If nothing renews it in that
+# window the session lapses, the site silently drops back to Steam-only data,
+# and it takes a manual re-seed to bring it back — which is exactly what
+# happened once. Vercel Cron on the Hobby plan only runs daily, so the schedule
+# that actually matters lives here.
+#
+# Setup: add a repository secret named CRON_SECRET whose value matches the
+# CRON_SECRET environment variable set in Vercel (Settings > Environment
+# Variables, Production). Nothing else is needed.
+#
+# Caveat worth knowing: GitHub disables scheduled workflows in a public
+# repository after 60 days with no repository activity, and emails the owner
+# when it does. This is therefore a good second layer, not the only one — pair
+# it with an external pinger (see .env.example) that has no such rule.
+name: Keep session alive
+
+on:
+  schedule:
+    # Every 30 minutes. GitHub delays scheduled runs under load, so a 30-minute
+    # cadence is what reliably lands inside the ~2-hour ticket window.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+# Never let two refreshes overlap, and drop a queued one rather than piling up
+# a backlog if GitHub runs late.
+concurrency:
+  group: keep-session-alive
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refresh the Ubisoft session
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "CRON_SECRET repository secret is not set — nothing can authorize the refresh."
+            exit 1
+          fi
+          # The secret goes in a header, not the URL, so it stays out of the
+          # run log. --fail-with-body still shows why a rejection happened.
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-delay 10 --retry-all-errors \
+            --max-time 60 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            https://for-honor-tracker.vercel.app/api/ubisoft-refresh
+          echo
