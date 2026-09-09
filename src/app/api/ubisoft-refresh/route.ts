@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { notifyOperator } from '@/server/alert';
 import { env } from '@/server/env';
+import { REFRESH_AUDIENCE, verifyGithubActionsToken } from '@/server/github-oidc';
 import { newTraceCollector } from '@/server/http';
 import { __internal } from '@/server/providers/ubisoft';
 import { storeBackend } from '@/server/ubisoft-session-store';
@@ -35,30 +36,46 @@ function bearer(header: string | null): string | null {
  * until someone re-seeds by hand. That is exactly how it went down once.
  *
  * Vercel Cron on the Hobby plan will only run this daily, which is not often
- * enough, so the schedule that actually keeps the session alive is an external
- * hourly pinger. Two callers, therefore, and two ways to authorize:
+ * enough, so the schedule that actually keeps the session alive is the GitHub
+ * Actions workflow in .github/workflows/. Three ways to authorize, therefore:
  *
- *   - Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`.
- *   - An external pinger fetches a plain URL, so it sends `?token=<secret>`.
+ *   - A GitHub Actions OIDC token, signed by GitHub and naming the repository
+ *     the run belongs to. This is the one the every-30-minutes schedule uses,
+ *     and it needs nothing configured on either side: no secret is generated,
+ *     copied, pasted or rotated, so there is nothing to set up wrong and
+ *     nothing to expire. See github-oidc.ts.
+ *   - `Authorization: Bearer <CRON_SECRET>`, which is what Vercel Cron sends.
+ *   - `?token=<CRON_SECRET>` or `?token=<DIAGNOSTICS_TOKEN>`, for an external
+ *     pinger or a one-off manual run. Prefer CRON_SECRET for anything
+ *     long-lived: a URL handed to a third-party scheduler lives in that
+ *     service's settings and its request logs, and CRON_SECRET authorizes
+ *     nothing but this idempotent refresh, whereas DIAGNOSTICS_TOKEN also
+ *     authorizes seeding and clearing the session.
  *
- * The query form deliberately accepts CRON_SECRET as well as DIAGNOSTICS_TOKEN.
- * A URL handed to a third-party scheduler lives in that service's settings and
- * its request logs, so it should carry the least dangerous secret that will do
- * the job: CRON_SECRET authorizes nothing but this idempotent refresh, whereas
- * DIAGNOSTICS_TOKEN also authorizes seeding and clearing the session. Use
- * CRON_SECRET for anything long-lived; the diagnostics token stays accepted
- * only for a one-off manual run.
+ * Every one of these is optional. If none is configured the route simply
+ * refuses everything, which is the right failure: it is better for the refresh
+ * to stop than for anyone passing by to be able to drive it, since each call
+ * spends a real request against Ubisoft on the operator's own account.
  *
  * The operator is pinged (if ALERT_WEBHOOK_URL is set) ONLY when a re-seed is
  * genuinely required. A healthy run is silent.
  */
 export async function GET(request: Request) {
-  const authHeader = request.headers.get('authorization');
+  const presented = bearer(request.headers.get('authorization'));
   const queryToken = new URL(request.url).searchParams.get('token');
-  const authorized =
-    secretOk(bearer(authHeader), env.cronSecret) ||
+
+  let authorized =
+    secretOk(presented, env.cronSecret) ||
     secretOk(queryToken, env.cronSecret) ||
     secretOk(queryToken, env.diagnosticsToken);
+
+  // A JWT is the GitHub Actions case. Only try that reading when the token
+  // actually looks like one, so an ordinary wrong secret is still rejected
+  // immediately rather than costing a round trip to GitHub.
+  if (!authorized && presented && presented.split('.').length === 3) {
+    const verdict = await verifyGithubActionsToken(presented, { audience: REFRESH_AUDIENCE });
+    authorized = verdict.ok;
+  }
 
   if (!authorized) {
     return NextResponse.json({ ok: false, message: 'Unauthorized.' }, { status: 401 });

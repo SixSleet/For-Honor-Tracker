@@ -6,14 +6,10 @@
 # happened once. Vercel Cron on the Hobby plan only runs daily, so the schedule
 # that actually matters lives here.
 #
-# Setup: add a repository secret named CRON_SECRET whose value matches the
-# CRON_SECRET environment variable set in Vercel (Settings > Environment
-# Variables, Production). Nothing else is needed.
-#
-# Caveat worth knowing: GitHub disables scheduled workflows in a public
-# repository after 60 days with no repository activity, and emails the owner
-# when it does. This is therefore a good second layer, not the only one — pair
-# it with an external pinger (see .env.example) that has no such rule.
+# There is nothing to set up. No secret is stored in this repository and none
+# needs to be: the job asks GitHub for a short-lived OIDC token describing this
+# run, and the site verifies it against GitHub's published signing keys and
+# checks that the run belongs to this repository. See src/server/github-oidc.ts.
 name: Keep session alive
 
 on:
@@ -29,7 +25,9 @@ concurrency:
   group: keep-session-alive
   cancel-in-progress: false
 
-permissions: {}
+permissions:
+  # The only permission the job needs, and the reason it needs no secret.
+  id-token: write
 
 jobs:
   refresh:
@@ -38,18 +36,24 @@ jobs:
     steps:
       - name: Refresh the Ubisoft session
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SITE: https://for-honor-tracker.vercel.app
+          AUDIENCE: for-honor-tracker-session-refresh
         run: |
           set -euo pipefail
-          if [ -z "${CRON_SECRET}" ]; then
-            echo "CRON_SECRET repository secret is not set — nothing can authorize the refresh."
-            exit 1
-          fi
-          # The secret goes in a header, not the URL, so it stays out of the
-          # run log. --fail-with-body still shows why a rejection happened.
+
+          # Mint the identity token for this run. Both variables are injected
+          # by the runner because of `id-token: write` above.
+          token=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+
+          # --fail-with-body so a rejection still prints why. The token is
+          # short-lived and audience-scoped, but it goes in a header rather
+          # than the URL so it stays out of the run log either way.
           curl --fail-with-body --silent --show-error \
             --retry 3 --retry-delay 10 --retry-all-errors \
             --max-time 60 \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            https://for-honor-tracker.vercel.app/api/ubisoft-refresh
+            -H "Authorization: Bearer ${token}" \
+            "${SITE}/api/ubisoft-refresh"
           echo

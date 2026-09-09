@@ -101,28 +101,37 @@ two hours. Something has to renew it more often than that, or the session
 lapses, every lookup falls back to Steam-only data, and it takes a manual
 re-seed to recover.
 
-`GET /api/ubisoft-refresh` does the renewal. It takes `CRON_SECRET` either as
-`Authorization: Bearer <secret>` or as `?token=<secret>`, and returns 200 when
-the session is healthy and 503 when it needs re-seeding, so any scheduler that
-watches HTTP status doubles as the alarm.
+`GET /api/ubisoft-refresh` does the renewal. It returns 200 when the session is
+healthy and 503 when it needs re-seeding, so a scheduler that watches HTTP
+status doubles as the alarm.
 
-Three layers drive it, in order of how much they can be relied on:
+Two things drive it:
 
-1. **An external pinger** every 30-60 minutes — a free cron-job.org or
-   UptimeRobot monitor pointed at
-   `https://<domain>/api/ubisoft-refresh?token=<CRON_SECRET>`. No dormancy
-   rules, and it emails on failure. This is the one that keeps the site up.
-2. **`.github/workflows/keep-session-alive.yml`**, every 30 minutes, needing
-   only a `CRON_SECRET` repository secret. Note that GitHub disables scheduled
-   workflows in a public repo after 60 days without repository activity.
-3. **Vercel Cron** (`vercel.json`), daily. Too infrequent to keep the session
-   alive on its own — the Hobby plan will not accept a shorter schedule — but
-   it is a floor, and it is what catches a session that everything else missed.
+1. **`.github/workflows/keep-session-alive.yml`**, every 30 minutes. This is
+   the one that keeps the site up, and it needs no configuration at all — no
+   secret is stored in the repository and none has to be. The job asks GitHub
+   for a short-lived OIDC token describing the run, and the route verifies it
+   against GitHub's published signing keys and checks that the run belongs to
+   this repository (`src/server/github-oidc.ts`). Nothing to paste, nothing to
+   rotate, nothing to get wrong. Note that GitHub disables scheduled workflows
+   in a public repo after 60 days with no repository activity, and emails the
+   owner when it does.
+2. **Vercel Cron** (`vercel.json`), daily, authorized by `CRON_SECRET` if that
+   variable is set. Far too infrequent to keep the session alive on its own —
+   the Hobby plan will not accept a shorter schedule — but it is a floor.
 
-Use `CRON_SECRET` for the scheduled callers and never `DIAGNOSTICS_TOKEN`. A
-URL handed to a third-party service lives in that service's settings and its
-request logs; `CRON_SECRET` can trigger nothing but this idempotent refresh,
-while `DIAGNOSTICS_TOKEN` can also seed or clear the shared session.
+The route also accepts `?token=<CRON_SECRET>` for an external pinger, and
+`?token=<DIAGNOSTICS_TOKEN>` for a one-off manual run. Prefer `CRON_SECRET` for
+anything long-lived: a URL handed to a third-party scheduler lives in that
+service's settings and its request logs, and `CRON_SECRET` authorizes nothing
+but this idempotent refresh, while `DIAGNOSTICS_TOKEN` can also seed or clear
+the shared session.
+
+Every one of those is optional. With none of them configured the route refuses
+everything except the GitHub workflow, which is the right default: each call
+spends a real request against Ubisoft on the operator's own account, so an
+endpoint anyone could drive would be worse than one that occasionally does not
+run.
 
 ## Known limitations
 
