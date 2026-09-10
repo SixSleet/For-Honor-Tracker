@@ -1,0 +1,50 @@
+# Research scaffolding, and deliberately not on main.
+#
+# Season 0 of the reworked Ranked launched on 2026-09-10. This asks whether it
+# brought any player data the project can actually read, by driving the probe
+# route on this branch's Vercel PREVIEW deployment. Production is untouched.
+#
+# The probe reports schema only — endpoint paths, statuses, key names and
+# counts — because this log is public. Delete this branch when the question is
+# answered.
+name: Ranked probe
+
+on:
+  push:
+    branches: [probe-ranked]
+
+permissions:
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe the preview deployment
+        env:
+          PREVIEW: https://for-honor-tracker-git-probe-ranked-six-s-team.vercel.app
+          AUDIENCE: for-honor-tracker-ranked-probe
+        run: |
+          set -euo pipefail
+
+          token=$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+
+          # The preview is still building when this job starts, so wait for it
+          # rather than racing it.
+          for attempt in $(seq 1 20); do
+            code=$(curl -s -o /tmp/out.json -w '%{http_code}' --max-time 90 \
+              -H "Authorization: Bearer ${token}" \
+              "${PREVIEW}/api/ranked-probe" || echo 000)
+            echo "attempt ${attempt}: HTTP ${code}"
+            if [ "$code" != "404" ] && [ "$code" != "000" ] && [ "$code" != "502" ]; then
+              break
+            fi
+            sleep 15
+          done
+
+          echo '--- probe result ---'
+          python3 -m json.tool /tmp/out.json || cat /tmp/out.json
