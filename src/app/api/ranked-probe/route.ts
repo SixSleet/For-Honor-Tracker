@@ -1,18 +1,33 @@
 /**
- * A throwaway research probe, asking one question: did the Ranked rework that
- * shipped as Season 0 on 2026-09-10 bring any player data with it that this
- * project can actually read?
+ * Research probe: find the live sub-paths of For Honor's own title services.
  *
- * This route exists on a research branch and must never be merged. It runs on
- * a Vercel PREVIEW deployment, driven by the workflow beside it, because the
- * container this was written in cannot reach ubi.com at all.
+ * Not for main. Runs on this branch's Vercel PREVIEW deployment, driven by the
+ * workflow beside it, because the container this was written in cannot reach
+ * ubi.com at all.
  *
- * IT REPORTS SCHEMA, NEVER CONTENT. Its output goes to a public GitHub Actions
- * log, so it returns endpoint paths, HTTP statuses, stat key NAMES, leaderboard
- * NAMES and cardinality counts — the parts that are identical for every player
- * — and never a stat value, a profile id, a display name or a ticket. The
- * question here is "does this endpoint carry ranked data", which key names and
- * counts answer on their own.
+ * The previous run established the thing that makes this worth doing: the
+ * title services named in fh-configuration (heroranking, heroleaderboard,
+ * skillrating, playerstats2, …) are LIVE and answer an ordinary session
+ * ticket. They are not behind game-client impersonation, contrary to this
+ * project's standing note. What is missing is their routes.
+ *
+ * Their 404 is an oracle. The UbiServices gateway answers an unknown path with
+ *   {"errorCode":1003,"message":"Resource '<url>' not found."}
+ * whereas the title service itself answers with
+ *   {"resource":"<its own root>","errorCode":"UnspecifiedError",
+ *    "message":"<the part it could not route>","serverUtcTime":...}
+ * So a reply in the second shape means "reached the service, wrong path", and
+ * ANYTHING ELSE — a 200, a 400 complaining about parameters, a 401, a 403 —
+ * means the path exists. That distinction is the whole result, so this reports
+ * candidates as UNMATCHED or as a HIT with the body.
+ *
+ * Everything is asked with the ordinary session ticket and NOTHING else. The
+ * configuration also hands over application_build_id_* and sandbox_name_*,
+ * which is what the game client presents; deliberately not sent. A 401 asking
+ * for them is a real answer and the end of this line of enquiry.
+ *
+ * Output is schema only — paths, statuses and service error text. The log is
+ * public, so no stat values and no ids: the profile id is masked to {id}.
  */
 import { NextResponse } from 'next/server';
 import { verifyGithubActionsToken } from '@/server/github-oidc';
@@ -23,34 +38,60 @@ import { readSession } from '@/server/ubisoft-session-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-interface Probe {
+/** Sub-paths to try under each service root. `{id}` becomes the profile id. */
+const CANDIDATES = [
+  // Things that would confirm routing outright.
+  'health',
+  'status',
+  'version',
+  'config',
+  'configuration',
+  // Ranking / rating shapes.
+  'ranking',
+  'rankings',
+  'rank',
+  'ranks',
+  'skillrating',
+  'skill',
+  'mmr',
+  'rating',
+  'ratings',
+  // Season shapes — Season 0 is what prompted all of this.
+  'seasons',
+  'season',
+  'season/current',
+  'currentseason',
+  'seasons/current',
+  // Player-scoped shapes.
+  'profiles/{id}',
+  'profiles/{id}/ranking',
+  'profiles/{id}/rank',
+  'profiles/{id}/season',
+  'profiles/{id}/stats',
+  'players/{id}/ranking',
+  'ranking/profiles/{id}',
+  'rankings/{id}',
+  'leaderboard',
+  'leaderboards',
+  'leaderboard/profiles/{id}',
+  'stats',
+  'stats/{id}',
+  'playerstats',
+];
+
+interface Result {
+  service: string;
   path: string;
   status: number | null;
-  note?: string;
-  /** Key or entry NAMES only. Never values. */
-  names?: string[];
-  count?: number;
+  /** UNMATCHED means the service answered with its own not-found shape. */
+  verdict: 'UNMATCHED' | 'GATEWAY-404' | 'HIT' | 'ERROR';
+  body?: string;
 }
-
-/** Ranked leaderboards to ask for by name, including guesses at new ones. */
-const LEADERBOARD_CANDIDATES = [
-  // Found live earlier in this project: the Ranked Duel definition.
-  'RankingPointsPerGameModeSeasonal.gameMode.R_DL2',
-  // Ranked Dominion is new in Season 0; these are the shapes it would take
-  // given how the Duel one is named.
-  'RankingPointsPerGameModeSeasonal.gameMode.R_DM2',
-  'RankingPointsPerGameModeSeasonal.gameMode.R_DMN2',
-  'RankingPointsPerGameModeSeasonal.gameMode.R_DOM',
-  'RankingPointsPerGameModeSeasonal.gameMode.R_DOM2',
-  'RankingPointsPerGameModeSeasonal',
-  'SeasonalLeaderboard',
-  'RankedSeasonalLeaderboard',
-];
 
 export async function GET(request: Request) {
   const presented = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
@@ -60,284 +101,91 @@ export async function GET(request: Request) {
   }
 
   const trace = newTraceCollector();
+  if (!(await readSession())) {
+    return NextResponse.json({ ok: false, reason: 'No session on this deployment.' }, { status: 503 });
+  }
 
-  // The stored session carries an empty profileId — the app never needs its
-  // own, it resolves a SEARCHED player's id instead. Sliding the session
-  // forward mints a fresh ticket and returns the profile it belongs to, which
-  // is the only id available here. The first version of this probe skipped
-  // that and asked every endpoint about nobody: /v1/profiles/stats duly
-  // answered 200 with zero keys, which reads exactly like "the ranked rework
-  // removed everything" and means nothing of the sort.
+  // Sliding the session forward is what yields the ticket's own profile id;
+  // the stored session carries an empty one by design.
   await forceRefresh(trace);
   const session = await login(trace);
   const stored = await readSession();
   const profileId = session.profileId || stored?.profileId || '';
+  const headers = authHeaders(session);
 
-  const probes: Probe[] = [];
-  const maskIds: string[] = [profileId];
-  /** Title-service base URLs, read from the space's own configuration. */
-  const titleServices: Record<string, string> = {};
+  const mask = (text: string) => (profileId ? text.split(profileId).join('{id}') : text);
 
-  /** Same as ask(), for a fully-qualified URL rather than a UbiServices path. */
-  async function askAbsolute(url: string, label: string) {
-    let shown = `${label}: ${url}`;
-    for (const id of maskIds) if (id) shown = shown.split(id).join('{id}');
-    try {
-      const response = await fetch(url, {
-        headers: authHeaders(session),
-        signal: AbortSignal.timeout(15_000),
-      });
-      const text = await response.text();
-      let masked = text;
-      for (const id of maskIds) if (id) masked = masked.split(id).join('{id}');
-      probes.push({ path: shown, status: response.status, note: masked.slice(0, 220) });
-    } catch (error) {
-      probes.push({ path: shown, status: null, note: String(error).slice(0, 120) });
-    }
-  }
-
-  async function ask(path: string, extract?: (body: unknown) => Partial<Probe>) {
-    let label = path;
-    for (const id of maskIds) if (id) label = label.split(id).join('{id}');
-    try {
-      const response = await fetch(`${UBI_SERVICES}${path}`, {
-        headers: authHeaders(session),
-        signal: AbortSignal.timeout(15_000),
-      });
-      const text = await response.text();
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        /* not JSON; status alone is the result */
-      }
-      probes.push({
-        path: label,
-        status: response.status,
-        ...(response.ok && parsed && extract ? extract(parsed) : {}),
-        ...(response.ok
-          ? {}
-          : {
-              note: maskIds
-                .reduce((acc, id) => (id ? acc.split(id).join('{id}') : acc), text)
-                .slice(0, 160),
-            }),
-      });
-    } catch (error) {
-      probes.push({ path: label, status: null, note: String(error).slice(0, 120) });
-    }
-  }
-
-  // CONTROL. Nothing below is worth reading unless this says the session and
-  // the profile id are both good, so it runs first and reports counts only.
-  const control: Probe[] = [];
-  if (!profileId) {
-    control.push({ path: 'CONTROL resolve own profileId', status: null, note: 'FAILED: empty' });
-  } else {
-    control.push({
-      path: 'CONTROL resolve own profileId',
-      status: 200,
-      note: `ok, ${profileId.length} chars`,
-    });
-  }
-
-  // The ticket's own profileId works for statscard but returns an empty
-  // profiles[] from /v1/profiles/stats — the stat ledger is keyed per platform
-  // profile, and the app only ever reaches it with a SEARCHED player's id.
-  // Resolve this account's own platform profiles the same way the app does,
-  // and ask each of them. Ids are never logged; only how many and which
-  // platform, which is game metadata rather than anything personal.
-  const statProfileIds: string[] = [profileId];
-  await ask(`/v2/profiles?userId=${profileId}`, (body) => {
-    const list = (body as { profiles?: Array<{ profileId?: string; platformType?: string }> })
-      .profiles ?? [];
-    const types: string[] = [];
-    for (const entry of list) {
-      if (entry.platformType) types.push(entry.platformType);
-      if (entry.profileId && !statProfileIds.includes(entry.profileId)) {
-        statProfileIds.push(entry.profileId);
-        maskIds.push(entry.profileId);
-      }
-    }
-    return { count: list.length, names: types, note: 'platform profiles resolved' };
-  });
-
-  await ask(`/v1/profiles/gamesplayed?profileIds=${profileId}`, (body) => {
-    const games = (body as { gamesPlayed?: Array<{ spaceId?: string }> }).gamesPlayed ?? [];
-    return {
-      count: games.length,
-      names: games.map((g) => g.spaceId ?? '?').slice(0, 10),
-      note: 'spaces this account owns',
-    };
-  });
-
+  // Read each space's configuration for the public title-service roots.
+  const services: Record<string, string> = {};
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
-    const short = spaceId.slice(0, 8);
-
-    // CONTROL: an endpoint proven to carry data earlier in this project.
-    // If this returns entries, a 404 below is Ubisoft's answer, not our bug.
-    await ask(
-      `/v1/profiles/${profileId}/statscard?spaceId=${spaceId}`,
-      (body) => {
-        const entries = (body as { Statscards?: unknown[] }).Statscards ?? [];
-        return { count: Array.isArray(entries) ? entries.length : 0, note: `CONTROL ${short}` };
-      },
-    );
-
-    // The response is { profiles: [{ profileId, stats }] } — as the provider
-    // itself parses it. An earlier version of this probe read body.stats[0]
-    // and reported 0 keys, which looked like the ledger had been wiped.
-    for (const [index, statId] of statProfileIds.entries()) {
-      await ask(`/v1/profiles/stats?spaceId=${spaceId}&profileIds=${statId}`, (body) => {
-        const profiles =
-          (body as { profiles?: Array<{ profileId?: string; stats?: Record<string, unknown> }> })
-            .profiles ?? [];
-        const names = Object.keys(profiles[0]?.stats ?? {}).sort();
-        return {
-          count: names.length,
-          names: names.filter((n) => /rank|season|elo|rating|skill|division|tier|compet/i.test(n)),
-          note: `${short} profile#${index}: ${profiles.length} profiles, ${names.length} keys`,
-        };
-      });
-    }
-
-    // Report the catalogue's own top-level shape rather than assuming it:
-    // the first version guessed a key and reported 0, which was the guess
-    // failing, not the catalogue being empty.
-    // Dump the configuration properly rather than counting it. The previous
-    // conclusion ("no new surface") compared 202 templates against a
-    // remembered ~200 and called that unchanged — a count is not a diff, and
-    // the only names printed were the ones matching a guessed regex. So print
-    // the whole catalogue, and open the groups that were never opened:
-    // fh-configuration is where this project found For Honor's own title
-    // services (playerstats2, heroleaderboard, heroranking, skillrating) and
-    // had 73 fields, and fh-customFeatureSwitches is where a new ranked mode
-    // would be gated.
-    await ask(`/v1/spaces/${spaceId}/parameters`, (body) => {
-      const outer = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-      const inner = (outer['parameters'] ?? outer) as Record<string, unknown>;
-      const out: string[] = [];
-
-      const urls = (inner['us-sdkClientUrls'] ?? {}) as Record<string, unknown>;
-      const fields = (urls['fields'] ?? {}) as Record<string, unknown>;
-      const fieldNames = Object.keys(fields).sort();
-      out.push(`ALL-URL-TEMPLATES[${fieldNames.length}]: ${fieldNames.join(' ')}`);
-
-      // Every group this project has never opened. Config is space-level game
-      // metadata — identical for every player — so names and values are safe
-      // to print; nothing here is per-account.
-      for (const group of [
-        'fh-configuration',
-        'fh-customFeatureSwitches',
-        'fh-clientSettings',
-        'fh-urlsNonFinalOnly',
-        'tgdpConfig',
-        'us-sdkClientFeaturesSwitches',
-        'fh-clubServices',
-      ]) {
-        const value = inner[group];
-        if (!value || typeof value !== 'object') {
-          out.push(`${group}: ABSENT`);
-          continue;
-        }
-        // Every group is itself wrapped as { fields, relatedPopulation }, so
-        // unwrap before printing — the previous run reported "[2 fields]" for
-        // all of them, which was the wrapper, not the contents.
-        const wrapper = value as Record<string, unknown>;
-        const inner2 = (wrapper['fields'] ?? wrapper) as Record<string, unknown>;
-        const entries = Object.entries(inner2);
-        out.push(`--- ${group} [${entries.length} fields] ---`);
-        for (const [key, raw] of entries) {
-          const flat =
-            raw && typeof raw === 'object' ? JSON.stringify(raw) : String(raw ?? '');
-          // 160 chars truncated fh-configuration mid-URL last time, hiding the
-          // title-service hosts this project found before, and cut the feature
-          // switch list off after "Tournament". These are space-level game
-          // config, identical for every player, so print them whole.
-          out.push(`${key} = ${flat.slice(0, 2000)}`);
-          // Keep the public title-service bases to probe below.
-          if (
-            group === 'fh-configuration' &&
-            /_public_v\d$/.test(key) &&
-            flat.startsWith('https://')
-          ) {
-            titleServices[key] = flat;
-          }
-        }
-      }
-
-      return {
-        count: fieldNames.length,
-        names: out,
-        note: `${short}: full configuration dump`,
-      };
+    const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
     });
-
-    // The title services, probed at the URLs the configuration itself gives.
-    //
-    // This is the lead the earlier passes missed. fh-configuration names
-    // heroranking, heroleaderboard, skillrating and playerstats2 — and their
-    // *_public_v1/v2 URLs sit on public-ubiservices.ubi.com, the very host
-    // this session's ticket already works against, not a separate game-only
-    // host. An earlier note in this project assumed ranked data was reachable
-    // only by impersonating the game client; these paths are worth asking
-    // plainly first.
-    //
-    // Asked with the ordinary session ticket and NOTHING else. The config also
-    // hands over application_build_id_* and sandbox_name_*, which is what the
-    // game client would present — deliberately not sent. If these answer 401
-    // asking for them, that is the answer, and this project does not
-    // impersonate the client to get around it.
-    for (const [label, base] of Object.entries(titleServices)) {
-      for (const suffix of ['', `profiles/${profileId}`, `players/${profileId}`, 'leaderboards']) {
-        await askAbsolute(`${base}${suffix}`, label);
+    if (!response.ok) continue;
+    const body = (await response.json()) as Record<string, unknown>;
+    const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
+    const config = ((inner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
+      {}) as Record<string, string>;
+    for (const [key, value] of Object.entries(config)) {
+      if (/_public_v\d$/.test(key) && typeof value === 'string' && value.startsWith('https://')) {
+        services[`${spaceId.slice(0, 8)}/${key}`] = value;
       }
-    }
-
-    // Enumerate rather than guess. The previous run's 404s only ruled out the
-    // eight names guessed at; if the rework renamed the boards, the list is
-    // the only way to learn what they are now called.
-    await ask(`/v1/spaces/${spaceId}/leaderboards`, (body) => {
-      const outer = body as { leaderboards?: unknown[] } & Record<string, unknown>;
-      const list = Array.isArray(outer.leaderboards) ? outer.leaderboards : [];
-      const names = list
-        .map((entry) => (entry as { name?: string })?.name)
-        .filter((n): n is string => typeof n === 'string');
-      return {
-        count: names.length,
-        names: names.slice(0, 60),
-        note: `${short}: LIST — top-level keys ${Object.keys(outer).join(',')}`.slice(0, 200),
-      };
-    });
-
-    for (const name of LEADERBOARD_CANDIDATES) {
-      await ask(
-        `/v1/spaces/${spaceId}/leaderboards/${encodeURIComponent(name)}?profileId=${profileId}`,
-        (body) => {
-          const board = body as { cardinality?: number; standings?: unknown[] };
-          return {
-            count: typeof board.cardinality === 'number' ? board.cardinality : undefined,
-            note: `cardinality=${board.cardinality ?? '?'} standings=${
-              Array.isArray(board.standings) ? board.standings.length : '?'
-            }`,
-          };
-        },
-      );
     }
   }
 
+  const results: Result[] = [];
+
+  async function probe(service: string, base: string, sub: string) {
+    const url = `${base}${sub.replace('{id}', profileId)}`;
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
+      const text = await response.text();
+      let parsed: Record<string, unknown> | null = null;
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        /* non-JSON is itself interesting */
+      }
+
+      // The service's own not-found shape: a string errorCode plus the root it
+      // recognised. Anything else means the path went somewhere.
+      const serviceMiss =
+        parsed?.['errorCode'] === 'UnspecifiedError' && typeof parsed?.['resource'] === 'string';
+      const gatewayMiss = parsed?.['errorCode'] === 1003;
+
+      results.push({
+        service,
+        path: sub,
+        status: response.status,
+        verdict: serviceMiss ? 'UNMATCHED' : gatewayMiss ? 'GATEWAY-404' : 'HIT',
+        ...(serviceMiss || gatewayMiss ? {} : { body: mask(text).slice(0, 300) }),
+      });
+    } catch (error) {
+      results.push({ service, path: sub, status: null, verdict: 'ERROR', body: String(error).slice(0, 100) });
+    }
+  }
+
+  // Ten at a time, so 150-odd requests fit inside the function's budget.
+  for (const [service, base] of Object.entries(services)) {
+    for (let i = 0; i < CANDIDATES.length; i += 10) {
+      await Promise.all(CANDIDATES.slice(i, i + 10).map((sub) => probe(service, base, sub)));
+    }
+  }
+
+  const hits = results.filter((r) => r.verdict === 'HIT' || r.verdict === 'ERROR');
   return NextResponse.json(
     {
       ok: true,
       at: new Date().toISOString(),
-      // Which build answered. The branch alias keeps serving the PREVIOUS
-      // ready deployment while a new one builds, and that old build returns
-      // perfectly valid JSON — so without this the workflow cannot tell the
-      // run it just pushed from the one before it, and silently reads stale
-      // results. It did exactly that twice.
       commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-      control,
-      probes,
+      profileIdResolved: Boolean(profileId),
+      servicesFound: Object.keys(services).length,
+      tried: results.length,
+      unmatched: results.filter((r) => r.verdict === 'UNMATCHED').length,
+      gateway404: results.filter((r) => r.verdict === 'GATEWAY-404').length,
+      // Only the interesting ones are listed; the rest are counted above.
+      hits,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
