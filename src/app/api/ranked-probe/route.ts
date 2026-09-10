@@ -75,6 +75,26 @@ export async function GET(request: Request) {
 
   const probes: Probe[] = [];
   const maskIds: string[] = [profileId];
+  /** Title-service base URLs, read from the space's own configuration. */
+  const titleServices: Record<string, string> = {};
+
+  /** Same as ask(), for a fully-qualified URL rather than a UbiServices path. */
+  async function askAbsolute(url: string, label: string) {
+    let shown = `${label}: ${url}`;
+    for (const id of maskIds) if (id) shown = shown.split(id).join('{id}');
+    try {
+      const response = await fetch(url, {
+        headers: authHeaders(session),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await response.text();
+      let masked = text;
+      for (const id of maskIds) if (id) masked = masked.split(id).join('{id}');
+      probes.push({ path: shown, status: response.status, note: masked.slice(0, 220) });
+    } catch (error) {
+      probes.push({ path: shown, status: null, note: String(error).slice(0, 120) });
+    }
+  }
 
   async function ask(path: string, extract?: (body: unknown) => Partial<Probe>) {
     let label = path;
@@ -235,6 +255,14 @@ export async function GET(request: Request) {
           // switch list off after "Tournament". These are space-level game
           // config, identical for every player, so print them whole.
           out.push(`${key} = ${flat.slice(0, 2000)}`);
+          // Keep the public title-service bases to probe below.
+          if (
+            group === 'fh-configuration' &&
+            /_public_v\d$/.test(key) &&
+            flat.startsWith('https://')
+          ) {
+            titleServices[key] = flat;
+          }
         }
       }
 
@@ -244,6 +272,27 @@ export async function GET(request: Request) {
         note: `${short}: full configuration dump`,
       };
     });
+
+    // The title services, probed at the URLs the configuration itself gives.
+    //
+    // This is the lead the earlier passes missed. fh-configuration names
+    // heroranking, heroleaderboard, skillrating and playerstats2 — and their
+    // *_public_v1/v2 URLs sit on public-ubiservices.ubi.com, the very host
+    // this session's ticket already works against, not a separate game-only
+    // host. An earlier note in this project assumed ranked data was reachable
+    // only by impersonating the game client; these paths are worth asking
+    // plainly first.
+    //
+    // Asked with the ordinary session ticket and NOTHING else. The config also
+    // hands over application_build_id_* and sandbox_name_*, which is what the
+    // game client would present — deliberately not sent. If these answer 401
+    // asking for them, that is the answer, and this project does not
+    // impersonate the client to get around it.
+    for (const [label, base] of Object.entries(titleServices)) {
+      for (const suffix of ['', `profiles/${profileId}`, `players/${profileId}`, 'leaderboards']) {
+        await askAbsolute(`${base}${suffix}`, label);
+      }
+    }
 
     // Enumerate rather than guess. The previous run's 404s only ruled out the
     // eight names guessed at; if the rework renamed the boards, the list is
