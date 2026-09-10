@@ -89,7 +89,7 @@ interface Result {
   path: string;
   status: number | null;
   /** UNMATCHED means the service answered with its own not-found shape. */
-  verdict: 'UNMATCHED' | 'GATEWAY-404' | 'HIT' | 'ERROR';
+  verdict: 'UNMATCHED' | 'GATEWAY-404' | 'NO-ROUTE' | 'HIT' | 'ERROR';
   body?: string;
 }
 
@@ -153,23 +153,47 @@ export async function GET(request: Request) {
       const serviceMiss =
         parsed?.['errorCode'] === 'UnspecifiedError' && typeof parsed?.['resource'] === 'string';
       const gatewayMiss = parsed?.['errorCode'] === 1003;
+      // Kong sits in front of the title services and has its own miss shape.
+      // The last run classified these as hits, which they are not — they mean
+      // the service root itself is not routed.
+      const kongMiss = parsed?.['message'] === 'no Route matched with those values';
+      const miss = serviceMiss || gatewayMiss || kongMiss;
 
       results.push({
         service,
         path: sub,
         status: response.status,
-        verdict: serviceMiss ? 'UNMATCHED' : gatewayMiss ? 'GATEWAY-404' : 'HIT',
-        ...(serviceMiss || gatewayMiss ? {} : { body: mask(text).slice(0, 300) }),
+        verdict: serviceMiss
+          ? 'UNMATCHED'
+          : gatewayMiss
+            ? 'GATEWAY-404'
+            : kongMiss
+              ? 'NO-ROUTE'
+              : 'HIT',
+        ...(miss ? {} : { body: mask(text).slice(0, 300) }),
       });
     } catch (error) {
       results.push({ service, path: sub, status: null, verdict: 'ERROR', body: String(error).slice(0, 100) });
     }
   }
 
-  // Ten at a time, so 150-odd requests fit inside the function's budget.
+  // heroranking answered with resource ".../heroranking/public" — so its
+  // route root is /public, and the "/v1/" in the configured URL is part of the
+  // remainder it could not match. Probe both: under the configured base, and
+  // under the root the service itself names.
+  const bases: Array<[string, string]> = [];
   for (const [service, base] of Object.entries(services)) {
-    for (let i = 0; i < CANDIDATES.length; i += 10) {
-      await Promise.all(CANDIDATES.slice(i, i + 10).map((sub) => probe(service, base, sub)));
+    // Only the services that could plausibly carry ranked data, to stay inside
+    // the function's time budget.
+    if (!/ranking|leaderboard|skillrating|playerstats/.test(service)) continue;
+    bases.push([service, base]);
+    const stripped = base.replace(/v\d\/$/, '');
+    if (stripped !== base) bases.push([`${service} (no version)`, stripped]);
+  }
+
+  for (const [service, base] of bases) {
+    for (let i = 0; i < CANDIDATES.length; i += 12) {
+      await Promise.all(CANDIDATES.slice(i, i + 12).map((sub) => probe(service, base, sub)));
     }
   }
 
@@ -184,6 +208,8 @@ export async function GET(request: Request) {
       tried: results.length,
       unmatched: results.filter((r) => r.verdict === 'UNMATCHED').length,
       gateway404: results.filter((r) => r.verdict === 'GATEWAY-404').length,
+      noRoute: results.filter((r) => r.verdict === 'NO-ROUTE').length,
+      servicesProbed: [...new Set(results.map((r) => r.service))],
       // Only the interesting ones are listed; the rest are counted above.
       hits,
     },
