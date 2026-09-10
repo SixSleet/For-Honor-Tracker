@@ -220,12 +220,21 @@ export async function GET(request: Request) {
           out.push(`${group}: ABSENT`);
           continue;
         }
-        const entries = Object.entries(value as Record<string, unknown>);
+        // Every group is itself wrapped as { fields, relatedPopulation }, so
+        // unwrap before printing — the previous run reported "[2 fields]" for
+        // all of them, which was the wrapper, not the contents.
+        const wrapper = value as Record<string, unknown>;
+        const inner2 = (wrapper['fields'] ?? wrapper) as Record<string, unknown>;
+        const entries = Object.entries(inner2);
         out.push(`--- ${group} [${entries.length} fields] ---`);
         for (const [key, raw] of entries) {
           const flat =
             raw && typeof raw === 'object' ? JSON.stringify(raw) : String(raw ?? '');
-          out.push(`${key} = ${flat.slice(0, 160)}`);
+          // 160 chars truncated fh-configuration mid-URL last time, hiding the
+          // title-service hosts this project found before, and cut the feature
+          // switch list off after "Tournament". These are space-level game
+          // config, identical for every player, so print them whole.
+          out.push(`${key} = ${flat.slice(0, 2000)}`);
         }
       }
 
