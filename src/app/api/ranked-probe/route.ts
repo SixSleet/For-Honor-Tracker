@@ -74,9 +74,11 @@ export async function GET(request: Request) {
   const profileId = session.profileId || stored?.profileId || '';
 
   const probes: Probe[] = [];
+  const maskIds: string[] = [profileId];
 
   async function ask(path: string, extract?: (body: unknown) => Partial<Probe>) {
-    const label = profileId ? path.split(profileId).join('{self}') : path;
+    let label = path;
+    for (const id of maskIds) if (id) label = label.split(id).join('{id}');
     try {
       const response = await fetch(`${UBI_SERVICES}${path}`, {
         headers: authHeaders(session),
@@ -95,7 +97,11 @@ export async function GET(request: Request) {
         ...(response.ok && parsed && extract ? extract(parsed) : {}),
         ...(response.ok
           ? {}
-          : { note: (profileId ? text.split(profileId).join('{self}') : text).slice(0, 160) }),
+          : {
+              note: maskIds
+                .reduce((acc, id) => (id ? acc.split(id).join('{id}') : acc), text)
+                .slice(0, 160),
+            }),
       });
     } catch (error) {
       probes.push({ path: label, status: null, note: String(error).slice(0, 120) });
@@ -115,6 +121,36 @@ export async function GET(request: Request) {
     });
   }
 
+  // The ticket's own profileId works for statscard but returns an empty
+  // profiles[] from /v1/profiles/stats — the stat ledger is keyed per platform
+  // profile, and the app only ever reaches it with a SEARCHED player's id.
+  // Resolve this account's own platform profiles the same way the app does,
+  // and ask each of them. Ids are never logged; only how many and which
+  // platform, which is game metadata rather than anything personal.
+  const statProfileIds: string[] = [profileId];
+  await ask(`/v2/profiles?userId=${profileId}`, (body) => {
+    const list = (body as { profiles?: Array<{ profileId?: string; platformType?: string }> })
+      .profiles ?? [];
+    const types: string[] = [];
+    for (const entry of list) {
+      if (entry.platformType) types.push(entry.platformType);
+      if (entry.profileId && !statProfileIds.includes(entry.profileId)) {
+        statProfileIds.push(entry.profileId);
+        maskIds.push(entry.profileId);
+      }
+    }
+    return { count: list.length, names: types, note: 'platform profiles resolved' };
+  });
+
+  await ask(`/v1/profiles/gamesplayed?profileIds=${profileId}`, (body) => {
+    const games = (body as { gamesPlayed?: Array<{ spaceId?: string }> }).gamesPlayed ?? [];
+    return {
+      count: games.length,
+      names: games.map((g) => g.spaceId ?? '?').slice(0, 10),
+      note: 'spaces this account owns',
+    };
+  });
+
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
     const short = spaceId.slice(0, 8);
 
@@ -131,18 +167,19 @@ export async function GET(request: Request) {
     // The response is { profiles: [{ profileId, stats }] } — as the provider
     // itself parses it. An earlier version of this probe read body.stats[0]
     // and reported 0 keys, which looked like the ledger had been wiped.
-    await ask(`/v1/profiles/stats?spaceId=${spaceId}&profileIds=${profileId}`, (body) => {
-      const profiles =
-        (body as { profiles?: Array<{ profileId?: string; stats?: Record<string, unknown> }> })
-          .profiles ?? [];
-      const mine = profiles.find((p) => p.profileId === profileId) ?? profiles[0];
-      const names = Object.keys(mine?.stats ?? {}).sort();
-      return {
-        count: names.length,
-        names: names.filter((n) => /rank|season|elo|rating|skill|division|tier|compet/i.test(n)),
-        note: `${short}: ${names.length} keys total; ranked/seasonal-looking names listed`,
-      };
-    });
+    for (const [index, statId] of statProfileIds.entries()) {
+      await ask(`/v1/profiles/stats?spaceId=${spaceId}&profileIds=${statId}`, (body) => {
+        const profiles =
+          (body as { profiles?: Array<{ profileId?: string; stats?: Record<string, unknown> }> })
+            .profiles ?? [];
+        const names = Object.keys(profiles[0]?.stats ?? {}).sort();
+        return {
+          count: names.length,
+          names: names.filter((n) => /rank|season|elo|rating|skill|division|tier|compet/i.test(n)),
+          note: `${short} profile#${index}: ${profiles.length} profiles, ${names.length} keys`,
+        };
+      });
+    }
 
     // Report the catalogue's own top-level shape rather than assuming it:
     // the first version guessed a key and reported 0, which was the guess
@@ -154,15 +191,26 @@ export async function GET(request: Request) {
       const outer = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
       const inner = (outer['parameters'] ?? outer) as Record<string, unknown>;
       const groups = Object.keys(inner).sort();
-      const urls = inner['us-sdkClientUrls'];
-      const urlNames = urls && typeof urls === 'object' ? Object.keys(urls as object) : [];
+      // us-sdkClientUrls reported 2 keys where earlier work found ~200, so
+      // the templates are a level deeper than the group. Flatten one level
+      // and report where they actually live.
+      const urls = (inner['us-sdkClientUrls'] ?? {}) as Record<string, unknown>;
+      const direct = Object.keys(urls);
+      const nested: string[] = [];
+      for (const [key, value] of Object.entries(urls)) {
+        if (value && typeof value === 'object') {
+          for (const child of Object.keys(value as object)) nested.push(`${key}.${child}`);
+        }
+      }
+      const all = [...direct, ...nested];
       return {
-        count: urlNames.length,
+        count: all.length,
         names: [
-          `GROUPS[${groups.length}]: ${groups.join(',')}`.slice(0, 400),
-          ...urlNames.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
+          `GROUPS[${groups.length}]: ${groups.join(',')}`.slice(0, 500),
+          `URLS direct[${direct.length}]: ${direct.join(',')}`.slice(0, 200),
+          ...all.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
         ],
-        note: `${short}: ${urlNames.length} URL templates`,
+        note: `${short}: ${direct.length} direct + ${nested.length} nested URL names`,
       };
     });
 
