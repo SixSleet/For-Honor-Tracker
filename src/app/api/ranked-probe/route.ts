@@ -184,33 +184,55 @@ export async function GET(request: Request) {
     // Report the catalogue's own top-level shape rather than assuming it:
     // the first version guessed a key and reported 0, which was the guess
     // failing, not the catalogue being empty.
-    // The catalogue is wrapped one level deep: { parameters: { <group>: … } }.
-    // The previous run reported "GROUPS[1]: parameters", which is what told
-    // us that, and why its "0 URL templates" meant nothing.
+    // Dump the configuration properly rather than counting it. The previous
+    // conclusion ("no new surface") compared 202 templates against a
+    // remembered ~200 and called that unchanged — a count is not a diff, and
+    // the only names printed were the ones matching a guessed regex. So print
+    // the whole catalogue, and open the groups that were never opened:
+    // fh-configuration is where this project found For Honor's own title
+    // services (playerstats2, heroleaderboard, heroranking, skillrating) and
+    // had 73 fields, and fh-customFeatureSwitches is where a new ranked mode
+    // would be gated.
     await ask(`/v1/spaces/${spaceId}/parameters`, (body) => {
       const outer = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
       const inner = (outer['parameters'] ?? outer) as Record<string, unknown>;
-      const groups = Object.keys(inner).sort();
-      // us-sdkClientUrls reported 2 keys where earlier work found ~200, so
-      // the templates are a level deeper than the group. Flatten one level
-      // and report where they actually live.
+      const out: string[] = [];
+
       const urls = (inner['us-sdkClientUrls'] ?? {}) as Record<string, unknown>;
-      const direct = Object.keys(urls);
-      const nested: string[] = [];
-      for (const [key, value] of Object.entries(urls)) {
-        if (value && typeof value === 'object') {
-          for (const child of Object.keys(value as object)) nested.push(`${key}.${child}`);
+      const fields = (urls['fields'] ?? {}) as Record<string, unknown>;
+      const fieldNames = Object.keys(fields).sort();
+      out.push(`ALL-URL-TEMPLATES[${fieldNames.length}]: ${fieldNames.join(' ')}`);
+
+      // Every group this project has never opened. Config is space-level game
+      // metadata — identical for every player — so names and values are safe
+      // to print; nothing here is per-account.
+      for (const group of [
+        'fh-configuration',
+        'fh-customFeatureSwitches',
+        'fh-clientSettings',
+        'fh-urlsNonFinalOnly',
+        'tgdpConfig',
+        'us-sdkClientFeaturesSwitches',
+        'fh-clubServices',
+      ]) {
+        const value = inner[group];
+        if (!value || typeof value !== 'object') {
+          out.push(`${group}: ABSENT`);
+          continue;
+        }
+        const entries = Object.entries(value as Record<string, unknown>);
+        out.push(`--- ${group} [${entries.length} fields] ---`);
+        for (const [key, raw] of entries) {
+          const flat =
+            raw && typeof raw === 'object' ? JSON.stringify(raw) : String(raw ?? '');
+          out.push(`${key} = ${flat.slice(0, 160)}`);
         }
       }
-      const all = [...direct, ...nested];
+
       return {
-        count: all.length,
-        names: [
-          `GROUPS[${groups.length}]: ${groups.join(',')}`.slice(0, 500),
-          `URLS direct[${direct.length}]: ${direct.join(',')}`.slice(0, 200),
-          ...all.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
-        ],
-        note: `${short}: ${direct.length} direct + ${nested.length} nested URL names`,
+        count: fieldNames.length,
+        names: out,
+        note: `${short}: full configuration dump`,
       };
     });
 
