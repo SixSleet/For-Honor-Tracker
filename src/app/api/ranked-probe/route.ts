@@ -26,7 +26,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
-const { login, authHeaders, UBI_SERVICES } = __internal;
+const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
 interface Probe {
   path: string;
@@ -60,25 +60,26 @@ export async function GET(request: Request) {
   }
 
   const trace = newTraceCollector();
-  const stored = await readSession();
-  if (!stored) {
-    return NextResponse.json(
-      { ok: false, reason: 'This deployment has no Ubisoft session (preview env vars?).' },
-      { status: 503 },
-    );
-  }
 
+  // The stored session carries an empty profileId — the app never needs its
+  // own, it resolves a SEARCHED player's id instead. Sliding the session
+  // forward mints a fresh ticket and returns the profile it belongs to, which
+  // is the only id available here. The first version of this probe skipped
+  // that and asked every endpoint about nobody: /v1/profiles/stats duly
+  // answered 200 with zero keys, which reads exactly like "the ranked rework
+  // removed everything" and means nothing of the sort.
+  await forceRefresh(trace);
   const session = await login(trace);
-  const headers = authHeaders(session);
-  const profileId = session.profileId || stored.profileId;
+  const stored = await readSession();
+  const profileId = session.profileId || stored?.profileId || '';
+
   const probes: Probe[] = [];
 
   async function ask(path: string, extract?: (body: unknown) => Partial<Probe>) {
-    // The path is logged; the profile id inside it never is.
-    const label = path.replace(profileId, '{self}');
+    const label = profileId ? path.split(profileId).join('{self}') : path;
     try {
       const response = await fetch(`${UBI_SERVICES}${path}`, {
-        headers,
+        headers: authHeaders(session),
         signal: AbortSignal.timeout(15_000),
       });
       const text = await response.text();
@@ -92,46 +93,69 @@ export async function GET(request: Request) {
         path: label,
         status: response.status,
         ...(response.ok && parsed && extract ? extract(parsed) : {}),
-        ...(response.ok ? {} : { note: text.slice(0, 200).replace(profileId, '{self}') }),
+        ...(response.ok
+          ? {}
+          : { note: (profileId ? text.split(profileId).join('{self}') : text).slice(0, 160) }),
       });
     } catch (error) {
       probes.push({ path: label, status: null, note: String(error).slice(0, 120) });
     }
   }
 
+  // CONTROL. Nothing below is worth reading unless this says the session and
+  // the profile id are both good, so it runs first and reports counts only.
+  const control: Probe[] = [];
+  if (!profileId) {
+    control.push({ path: 'CONTROL resolve own profileId', status: null, note: 'FAILED: empty' });
+  } else {
+    control.push({
+      path: 'CONTROL resolve own profileId',
+      status: 200,
+      note: `ok, ${profileId.length} chars`,
+    });
+  }
+
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
-    // 1. The lifetime stat ledger. New ranked counters would appear as new
-    //    key names here — names only, so nothing personal leaves.
+    const short = spaceId.slice(0, 8);
+
+    // CONTROL: an endpoint proven to carry data earlier in this project.
+    // If this returns entries, a 404 below is Ubisoft's answer, not our bug.
     await ask(
-      `/v1/profiles/stats?spaceId=${spaceId}&profileIds=${profileId}`,
+      `/v1/profiles/${profileId}/statscard?spaceId=${spaceId}`,
       (body) => {
-        const stats = (body as { stats?: Array<{ stats?: Record<string, unknown> }> }).stats ?? [];
-        const names = Object.keys(stats[0]?.stats ?? {}).sort();
-        return {
-          count: names.length,
-          names: names.filter((n) => /rank|season|elo|rating|skill|division|tier/i.test(n)),
-          note: `${names.length} keys; listing only ranked/seasonal-looking names`,
-        };
+        const entries = (body as { Statscards?: unknown[] }).Statscards ?? [];
+        return { count: Array.isArray(entries) ? entries.length : 0, note: `CONTROL ${short}` };
       },
     );
 
-    // 2. Ubisoft's own client URL catalogue. A new ranked backend has to be
-    //    reachable by the game, so it would be named here.
-    await ask(`/v1/spaces/${spaceId}/parameters`, (body) => {
-      const groups = body as Record<string, Record<string, unknown>>;
-      const urls = groups['us-sdkClientUrls'] ?? {};
-      const names = Object.keys(urls).sort();
+    await ask(`/v1/profiles/stats?spaceId=${spaceId}&profileIds=${profileId}`, (body) => {
+      const stats = (body as { stats?: Array<{ stats?: Record<string, unknown> }> }).stats ?? [];
+      const names = Object.keys(stats[0]?.stats ?? {}).sort();
       return {
         count: names.length,
-        names: names.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
-        note: `${names.length} URL templates; listing only ranked/seasonal-looking names`,
+        names: names.filter((n) => /rank|season|elo|rating|skill|division|tier/i.test(n)),
+        note: `${short}: ${names.length} keys total; ranked/seasonal-looking names listed`,
       };
     });
 
-    // 3. The leaderboards themselves. Earlier in this project every ranked
-    //    board answered 200 with cardinality 0 — defined but never populated.
-    //    Seasonal Leaderboards shipping as a real feature is the thing most
-    //    likely to have changed that, so cardinality is the number that matters.
+    // Report the catalogue's own top-level shape rather than assuming it:
+    // the first version guessed a key and reported 0, which was the guess
+    // failing, not the catalogue being empty.
+    await ask(`/v1/spaces/${spaceId}/parameters`, (body) => {
+      const top = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+      const groups = Object.keys(top).sort();
+      const urls = top['us-sdkClientUrls'];
+      const urlNames = urls && typeof urls === 'object' ? Object.keys(urls as object) : [];
+      return {
+        count: urlNames.length,
+        names: [
+          `GROUPS[${groups.length}]: ${groups.slice(0, 12).join(',')}`,
+          ...urlNames.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
+        ],
+        note: `${short}: ${urlNames.length} URL templates`,
+      };
+    });
+
     for (const name of LEADERBOARD_CANDIDATES) {
       await ask(
         `/v1/spaces/${spaceId}/leaderboards/${encodeURIComponent(name)}?profileId=${profileId}`,
@@ -149,7 +173,7 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(
-    { ok: true, at: new Date().toISOString(), probes },
+    { ok: true, at: new Date().toISOString(), control, probes },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }
