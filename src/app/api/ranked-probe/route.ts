@@ -128,12 +128,18 @@ export async function GET(request: Request) {
       },
     );
 
+    // The response is { profiles: [{ profileId, stats }] } — as the provider
+    // itself parses it. An earlier version of this probe read body.stats[0]
+    // and reported 0 keys, which looked like the ledger had been wiped.
     await ask(`/v1/profiles/stats?spaceId=${spaceId}&profileIds=${profileId}`, (body) => {
-      const stats = (body as { stats?: Array<{ stats?: Record<string, unknown> }> }).stats ?? [];
-      const names = Object.keys(stats[0]?.stats ?? {}).sort();
+      const profiles =
+        (body as { profiles?: Array<{ profileId?: string; stats?: Record<string, unknown> }> })
+          .profiles ?? [];
+      const mine = profiles.find((p) => p.profileId === profileId) ?? profiles[0];
+      const names = Object.keys(mine?.stats ?? {}).sort();
       return {
         count: names.length,
-        names: names.filter((n) => /rank|season|elo|rating|skill|division|tier/i.test(n)),
+        names: names.filter((n) => /rank|season|elo|rating|skill|division|tier|compet/i.test(n)),
         note: `${short}: ${names.length} keys total; ranked/seasonal-looking names listed`,
       };
     });
@@ -141,18 +147,38 @@ export async function GET(request: Request) {
     // Report the catalogue's own top-level shape rather than assuming it:
     // the first version guessed a key and reported 0, which was the guess
     // failing, not the catalogue being empty.
+    // The catalogue is wrapped one level deep: { parameters: { <group>: … } }.
+    // The previous run reported "GROUPS[1]: parameters", which is what told
+    // us that, and why its "0 URL templates" meant nothing.
     await ask(`/v1/spaces/${spaceId}/parameters`, (body) => {
-      const top = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-      const groups = Object.keys(top).sort();
-      const urls = top['us-sdkClientUrls'];
+      const outer = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+      const inner = (outer['parameters'] ?? outer) as Record<string, unknown>;
+      const groups = Object.keys(inner).sort();
+      const urls = inner['us-sdkClientUrls'];
       const urlNames = urls && typeof urls === 'object' ? Object.keys(urls as object) : [];
       return {
         count: urlNames.length,
         names: [
-          `GROUPS[${groups.length}]: ${groups.slice(0, 12).join(',')}`,
+          `GROUPS[${groups.length}]: ${groups.join(',')}`.slice(0, 400),
           ...urlNames.filter((n) => /rank|season|leaderboard|elo|skill|division|compet/i.test(n)),
         ],
         note: `${short}: ${urlNames.length} URL templates`,
+      };
+    });
+
+    // Enumerate rather than guess. The previous run's 404s only ruled out the
+    // eight names guessed at; if the rework renamed the boards, the list is
+    // the only way to learn what they are now called.
+    await ask(`/v1/spaces/${spaceId}/leaderboards`, (body) => {
+      const outer = body as { leaderboards?: unknown[] } & Record<string, unknown>;
+      const list = Array.isArray(outer.leaderboards) ? outer.leaderboards : [];
+      const names = list
+        .map((entry) => (entry as { name?: string })?.name)
+        .filter((n): n is string => typeof n === 'string');
+      return {
+        count: names.length,
+        names: names.slice(0, 60),
+        note: `${short}: LIST — top-level keys ${Object.keys(outer).join(',')}`.slice(0, 200),
       };
     });
 
