@@ -33,18 +33,28 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
 
-          # The preview is still building when this job starts, so wait for it
-          # rather than racing it.
-          for attempt in $(seq 1 20); do
+          # The preview is still building when this job starts. While it is,
+          # Vercel answers with its own "Deployment is building" page — and
+          # serves it as HTTP 200, so the status code says nothing about
+          # whether the route is up. Wait for a JSON body instead.
+          ready=no
+          for attempt in $(seq 1 30); do
             code=$(curl -s -o /tmp/out.json -w '%{http_code}' --max-time 90 \
               -H "Authorization: Bearer ${token}" \
               "${PREVIEW}/api/ranked-probe" || echo 000)
-            echo "attempt ${attempt}: HTTP ${code}"
-            if [ "$code" != "404" ] && [ "$code" != "000" ] && [ "$code" != "502" ]; then
+            if python3 -c 'import json,sys; json.load(open("/tmp/out.json"))' 2>/dev/null; then
+              echo "attempt ${attempt}: HTTP ${code}, JSON body — ready"
+              ready=yes
               break
             fi
+            echo "attempt ${attempt}: HTTP ${code}, not JSON yet (still building)"
             sleep 15
           done
 
+          if [ "$ready" != "yes" ]; then
+            echo "Preview never served JSON; giving up rather than reporting a non-result."
+            exit 1
+          fi
+
           echo '--- probe result ---'
-          python3 -m json.tool /tmp/out.json || cat /tmp/out.json
+          python3 -m json.tool /tmp/out.json
