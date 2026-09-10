@@ -138,10 +138,17 @@ export async function GET(request: Request) {
     }
   }
 
-  async function call(label: string, template: string) {
+  async function call(label: string, template: string, version: string) {
     // Fill in what we know. Anything still in braces is reported unresolved
     // rather than guessed at.
+    // {baseurl_aws} and {version} are resolved, not guessed: the catalogue
+    // gives allProfilesStats as {baseurl_aws}/{version}/profiles/stats, and
+    // this project already calls that endpoint successfully as
+    // https://public-ubiservices.ubi.com/v1/profiles/stats. So the host is
+    // UBI_SERVICES and the version is the ordinary v1/v2/v3 ladder.
     const url = template
+      .replace(/\{baseurl_aws\}/g, UBI_SERVICES)
+      .replace(/\{version\}/g, version)
       .replace(/\{spaceId\}/g, label.startsWith('882ad5b5') ? FOR_HONOR_SPACE_IDS[0]! : FOR_HONOR_SPACE_IDS[1]!)
       .replace(/\{profileId\}/g, profileId)
       .replace(/\{profileIds\}/g, profileId)
@@ -184,8 +191,12 @@ export async function GET(request: Request) {
     }
   }
 
+  // Try the version ladder; a 404 on v1 is not the same as the route not
+  // existing, as this project already learned with applications v2 -> v3.
   for (const [label, template] of Object.entries(templates)) {
-    await call(label, template);
+    for (const version of ['v1', 'v2', 'v3']) {
+      await call(`${label} ${version}`, template, version);
+    }
   }
 
   return NextResponse.json(
@@ -196,9 +207,10 @@ export async function GET(request: Request) {
       profileIdResolved: Boolean(profileId),
       templatesFound: Object.keys(templates).length,
       tried: results.length,
-      // Every result, with the template it came from — there are only a
-      // couple of dozen, and each one is a real endpoint rather than a guess.
-      results,
+      gateway404: results.filter((r) => r.verdict === 'GATEWAY-404').length,
+      // Anything that is NOT the gateway's plain "no such resource" — those
+      // are the ones that went somewhere.
+      interesting: results.filter((r) => r.verdict !== 'GATEWAY-404'),
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
