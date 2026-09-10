@@ -37,22 +37,28 @@ jobs:
           # Vercel answers with its own "Deployment is building" page — and
           # serves it as HTTP 200, so the status code says nothing about
           # whether the route is up. Wait for a JSON body instead.
+          # Waiting for "a JSON body" is not enough. While the new build runs,
+          # the branch alias still serves the PREVIOUS ready deployment, which
+          # answers with perfectly good JSON from the old code — so the only
+          # safe check is whether the build that answered is the commit this
+          # job is for.
           ready=no
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 40); do
             code=$(curl -s -o /tmp/out.json -w '%{http_code}' --max-time 90 \
               -H "Authorization: Bearer ${token}" \
               "${PREVIEW}/api/ranked-probe" || echo 000)
-            if python3 -c 'import json,sys; json.load(open("/tmp/out.json"))' 2>/dev/null; then
-              echo "attempt ${attempt}: HTTP ${code}, JSON body — ready"
+            got=$(python3 -c 'import json; print(json.load(open("/tmp/out.json")).get("commit") or "none")' 2>/dev/null || echo unparseable)
+            if [ "$got" = "${GITHUB_SHA}" ]; then
+              echo "attempt ${attempt}: HTTP ${code}, commit ${got:0:8} — this is our build"
               ready=yes
               break
             fi
-            echo "attempt ${attempt}: HTTP ${code}, not JSON yet (still building)"
+            echo "attempt ${attempt}: HTTP ${code}, served commit ${got:0:8}, want ${GITHUB_SHA:0:8}"
             sleep 15
           done
 
           if [ "$ready" != "yes" ]; then
-            echo "Preview never served JSON; giving up rather than reporting a non-result."
+            echo "Preview never served this commit; refusing to report a stale result."
             exit 1
           fi
 

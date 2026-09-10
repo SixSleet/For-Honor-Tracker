@@ -173,7 +173,18 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(
-    { ok: true, at: new Date().toISOString(), control, probes },
+    {
+      ok: true,
+      at: new Date().toISOString(),
+      // Which build answered. The branch alias keeps serving the PREVIOUS
+      // ready deployment while a new one builds, and that old build returns
+      // perfectly valid JSON — so without this the workflow cannot tell the
+      // run it just pushed from the one before it, and silently reads stale
+      // results. It did exactly that twice.
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      control,
+      probes,
+    },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }
