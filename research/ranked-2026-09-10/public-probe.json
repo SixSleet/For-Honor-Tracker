@@ -1,0 +1,139 @@
+{
+  "generatedAt": "2026-09-10T15:07:19.283Z",
+  "authenticated": false,
+  "requests": [
+    {
+      "key": "parameters",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/parameters",
+      "status": 200,
+      "outcome": "response-received-unverified"
+    },
+    {
+      "key": "parameters",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/882ad5b5-f549-44a1-a434-c465d22fe4bf/parameters",
+      "status": 200,
+      "outcome": "response-received-unverified"
+    },
+    {
+      "key": "hn_ranking_public_v1",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroranking/public/v1/",
+      "status": 404,
+      "outcome": "path-not-found"
+    },
+    {
+      "key": "hn_ranking_public_v2",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroranking/public/v2/",
+      "status": 404,
+      "outcome": "path-not-found"
+    },
+    {
+      "key": "hn_leaderboard_public_v1",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroleaderboard/public/v1/",
+      "status": 404,
+      "outcome": "path-not-found"
+    },
+    {
+      "key": "hn_skillrating_public_v1",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/skillrating/public/v1/",
+      "status": 404,
+      "outcome": "path-not-found"
+    },
+    {
+      "key": "spacesLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/leaderboards",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    },
+    {
+      "key": "profilesLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/profiles/ranks?spaceId=c2294cd6-bd01-4f19-81e9-4e5d32cb763a",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    },
+    {
+      "key": "profilesMeLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/profiles/me/ranks?spaceId=c2294cd6-bd01-4f19-81e9-4e5d32cb763a",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    },
+    {
+      "key": "spacesLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/spaces/882ad5b5-f549-44a1-a434-c465d22fe4bf/leaderboards",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    },
+    {
+      "key": "profilesLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/profiles/ranks?spaceId=882ad5b5-f549-44a1-a434-c465d22fe4bf",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    },
+    {
+      "key": "profilesMeLeaderboard",
+      "url": "https://public-ubiservices.ubi.com/v1/profiles/me/ranks?spaceId=882ad5b5-f549-44a1-a434-c465d22fe4bf",
+      "status": 404,
+      "outcome": "path-not-found",
+      "errorCode": 1003
+    }
+  ],
+  "catalogues": [
+    {
+      "space": "c2294cd6-bd01-4f19-81e9-4e5d32cb763a",
+      "sha256": "b112cad9e0a40a3c8d31db5e5e04cde7897e084e736c8aed4869bc86c237e550",
+      "advertised": [
+        {
+          "key": "hn_ranking_public_v1",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroranking/public/v1/"
+        },
+        {
+          "key": "hn_ranking_public_v2",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroranking/public/v2/"
+        },
+        {
+          "key": "hn_leaderboard_public_v1",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/heroleaderboard/public/v1/"
+        },
+        {
+          "key": "hn_skillrating_public_v1",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/title/hero/hero-live/skillrating/public/v1/"
+        },
+        {
+          "key": "spacesLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-bd01-4f19-81e9-4e5d32cb763a/leaderboards"
+        },
+        {
+          "key": "profilesLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/profiles/ranks?spaceId=c2294cd6-bd01-4f19-81e9-4e5d32cb763a"
+        },
+        {
+          "key": "profilesMeLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/profiles/me/ranks?spaceId=c2294cd6-bd01-4f19-81e9-4e5d32cb763a"
+        }
+      ]
+    },
+    {
+      "space": "882ad5b5-f549-44a1-a434-c465d22fe4bf",
+      "sha256": "608b44913ada2b3d0eed15aee1e008a875adfe7001423f657a838461f1a5bddb",
+      "advertised": [
+        {
+          "key": "spacesLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/spaces/882ad5b5-f549-44a1-a434-c465d22fe4bf/leaderboards"
+        },
+        {
+          "key": "profilesLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/profiles/ranks?spaceId=882ad5b5-f549-44a1-a434-c465d22fe4bf"
+        },
+        {
+          "key": "profilesMeLeaderboard",
+          "url": "https://public-ubiservices.ubi.com/v1/profiles/me/ranks?spaceId=882ad5b5-f549-44a1-a434-c465d22fe4bf"
+        }
+      ]
+    }
+  ],
+  "halted": false
+}

@@ -1,0 +1,90 @@
+{
+  "before": {
+    "sha256": "4fe6b8b6550059d0f852067e21cda206758d3ddc4ba915d6992929ea1401dbb3",
+    "saveDate": "2026-06-09",
+    "ranked": [
+      {
+        "id": 22,
+        "name": "1v1 Duel (Ranked)",
+        "skillFamily": 1,
+        "recipeIds": [
+          3842653686
+        ],
+        "divisionSpread": 4,
+        "minimumReputation": 1,
+        "maximumGroupSize": 1,
+        "singlePick": false
+      }
+    ]
+  },
+  "after": {
+    "sha256": "34898fd50396ff7d7a81ebdb9130323be07043c6d9118e241227cf095d467a3f",
+    "saveDate": "2026-09-01",
+    "ranked": [
+      {
+        "id": 22,
+        "name": "1v1 Duel (Ranked)",
+        "skillFamily": 1,
+        "recipeIds": [
+          3842653686
+        ],
+        "divisionSpread": 4,
+        "minimumReputation": 1,
+        "maximumGroupSize": 1,
+        "singlePick": false
+      },
+      {
+        "id": 135,
+        "name": "4v4 Dominion (Ranked)",
+        "skillFamily": 2,
+        "recipeIds": [
+          15372836303
+        ],
+        "divisionSpread": 10,
+        "minimumReputation": 5,
+        "maximumGroupSize": 2,
+        "singlePick": true
+      },
+      {
+        "id": 136,
+        "name": "1v1 Duel (Ranked V2)",
+        "skillFamily": 1,
+        "recipeIds": [
+          15372836260
+        ],
+        "divisionSpread": 4,
+        "minimumReputation": 5,
+        "maximumGroupSize": 1,
+        "singlePick": false
+      }
+    ]
+  },
+  "added": [
+    {
+      "id": 135,
+      "name": "4v4 Dominion (Ranked)",
+      "skillFamily": 2,
+      "recipeIds": [
+        15372836303
+      ],
+      "divisionSpread": 10,
+      "minimumReputation": 5,
+      "maximumGroupSize": 2,
+      "singlePick": true
+    },
+    {
+      "id": 136,
+      "name": "1v1 Duel (Ranked V2)",
+      "skillFamily": 1,
+      "recipeIds": [
+        15372836260
+      ],
+      "divisionSpread": 4,
+      "minimumReputation": 5,
+      "maximumGroupSize": 1,
+      "singlePick": false
+    }
+  ],
+  "removedIds": [],
+  "note": "Playlist and skill-family IDs are game configuration, not proven ranked API parameters. A retained playlist does not prove it remains available in the UI."
+}
