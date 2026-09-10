@@ -43,45 +43,30 @@ export const maxDuration = 120;
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-/** Sub-paths to try under each service root. `{id}` becomes the profile id. */
-const CANDIDATES = [
-  // Things that would confirm routing outright.
-  'health',
-  'status',
-  'version',
-  'config',
-  'configuration',
-  // Ranking / rating shapes.
-  'ranking',
-  'rankings',
-  'rank',
-  'ranks',
-  'skillrating',
-  'skill',
-  'mmr',
-  'rating',
-  'ratings',
-  // Season shapes — Season 0 is what prompted all of this.
-  'seasons',
-  'season',
-  'season/current',
-  'currentseason',
-  'seasons/current',
-  // Player-scoped shapes.
-  'profiles/{id}',
-  'profiles/{id}/ranking',
-  'profiles/{id}/rank',
-  'profiles/{id}/season',
-  'profiles/{id}/stats',
-  'players/{id}/ranking',
-  'ranking/profiles/{id}',
-  'rankings/{id}',
-  'leaderboard',
-  'leaderboards',
-  'leaderboard/profiles/{id}',
-  'stats',
-  'stats/{id}',
-  'playerstats',
+/**
+ * Endpoints from Ubisoft's own URL catalogue worth calling for a For Honor
+ * tracker. The catalogue stores a URL TEMPLATE for each, so these need no
+ * guessing at all — which is the point, after 594 guessed title-service paths
+ * returned exactly zero hits.
+ *
+ * profilesReputation and profilesProgressionGraph are the interesting pair:
+ * both were invisible to the earlier passes because neither name contains
+ * "rank", "season" or "leaderboard".
+ */
+const WANTED = [
+  'profilesReputation',
+  'profilesProgressionGraph',
+  'profilesMeLeaderboard',
+  'profilesLeaderboard',
+  'spacesLeaderboard',
+  'profilesSeasonChallenges',
+  'spacesSeasonChallenges',
+  'profilesChallenges',
+  'profilesMeBattlepassesSeasons',
+  'spacesBattlepassesSeasons',
+  'profilesStats',
+  'allProfilesStats',
+  'spacesStats',
 ];
 
 interface Result {
@@ -136,8 +121,43 @@ export async function GET(request: Request) {
 
   const results: Result[] = [];
 
-  async function probe(service: string, base: string, sub: string) {
-    const url = `${base}${sub.replace('{id}', profileId)}`;
+  // Read the URL templates rather than guessing paths.
+  const templates: Record<string, string> = {};
+  for (const spaceId of FOR_HONOR_SPACE_IDS) {
+    const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) continue;
+    const body = (await response.json()) as Record<string, unknown>;
+    const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
+    const urls = ((inner['us-sdkClientUrls'] as Record<string, unknown>)?.['fields'] ??
+      {}) as Record<string, string>;
+    for (const name of WANTED) {
+      if (typeof urls[name] === 'string') templates[`${spaceId.slice(0, 8)}/${name}`] = urls[name];
+    }
+  }
+
+  async function call(label: string, template: string) {
+    // Fill in what we know. Anything still in braces is reported unresolved
+    // rather than guessed at.
+    const url = template
+      .replace(/\{spaceId\}/g, label.startsWith('882ad5b5') ? FOR_HONOR_SPACE_IDS[0]! : FOR_HONOR_SPACE_IDS[1]!)
+      .replace(/\{profileId\}/g, profileId)
+      .replace(/\{profileIds\}/g, profileId)
+      .replace(/\{userId\}/g, profileId);
+
+    if (/\{[^}]+\}/.test(url)) {
+      results.push({
+        service: label,
+        path: template,
+        status: null,
+        verdict: 'ERROR',
+        body: `unresolved placeholder: ${url.match(/\{[^}]+\}/g)?.join(',')}`,
+      });
+      return;
+    }
+
     try {
       const response = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
       const text = await response.text();
@@ -147,71 +167,38 @@ export async function GET(request: Request) {
       } catch {
         /* non-JSON is itself interesting */
       }
-
-      // The service's own not-found shape: a string errorCode plus the root it
-      // recognised. Anything else means the path went somewhere.
-      const serviceMiss =
-        parsed?.['errorCode'] === 'UnspecifiedError' && typeof parsed?.['resource'] === 'string';
       const gatewayMiss = parsed?.['errorCode'] === 1003;
-      // Kong sits in front of the title services and has its own miss shape.
-      // The last run classified these as hits, which they are not — they mean
-      // the service root itself is not routed.
-      const kongMiss = parsed?.['message'] === 'no Route matched with those values';
-      const miss = serviceMiss || gatewayMiss || kongMiss;
-
       results.push({
-        service,
-        path: sub,
+        service: label,
+        path: mask(template),
         status: response.status,
-        verdict: serviceMiss
-          ? 'UNMATCHED'
-          : gatewayMiss
-            ? 'GATEWAY-404'
-            : kongMiss
-              ? 'NO-ROUTE'
-              : 'HIT',
-        ...(miss ? {} : { body: mask(text).slice(0, 300) }),
+        verdict: gatewayMiss ? 'GATEWAY-404' : 'HIT',
+        // Response KEYS only, never values — this log is public and these
+        // endpoints may return real player data.
+        body: parsed
+          ? `keys: ${Object.keys(parsed).join(',')}`
+          : mask(text).slice(0, 200),
       });
     } catch (error) {
-      results.push({ service, path: sub, status: null, verdict: 'ERROR', body: String(error).slice(0, 100) });
+      results.push({ service: label, path: template, status: null, verdict: 'ERROR', body: String(error).slice(0, 100) });
     }
   }
 
-  // heroranking answered with resource ".../heroranking/public" — so its
-  // route root is /public, and the "/v1/" in the configured URL is part of the
-  // remainder it could not match. Probe both: under the configured base, and
-  // under the root the service itself names.
-  const bases: Array<[string, string]> = [];
-  for (const [service, base] of Object.entries(services)) {
-    // Only the services that could plausibly carry ranked data, to stay inside
-    // the function's time budget.
-    if (!/ranking|leaderboard|skillrating|playerstats/.test(service)) continue;
-    bases.push([service, base]);
-    const stripped = base.replace(/v\d\/$/, '');
-    if (stripped !== base) bases.push([`${service} (no version)`, stripped]);
+  for (const [label, template] of Object.entries(templates)) {
+    await call(label, template);
   }
 
-  for (const [service, base] of bases) {
-    for (let i = 0; i < CANDIDATES.length; i += 12) {
-      await Promise.all(CANDIDATES.slice(i, i + 12).map((sub) => probe(service, base, sub)));
-    }
-  }
-
-  const hits = results.filter((r) => r.verdict === 'HIT' || r.verdict === 'ERROR');
   return NextResponse.json(
     {
       ok: true,
       at: new Date().toISOString(),
       commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
       profileIdResolved: Boolean(profileId),
-      servicesFound: Object.keys(services).length,
+      templatesFound: Object.keys(templates).length,
       tried: results.length,
-      unmatched: results.filter((r) => r.verdict === 'UNMATCHED').length,
-      gateway404: results.filter((r) => r.verdict === 'GATEWAY-404').length,
-      noRoute: results.filter((r) => r.verdict === 'NO-ROUTE').length,
-      servicesProbed: [...new Set(results.map((r) => r.service))],
-      // Only the interesting ones are listed; the rest are counted above.
-      hits,
+      // Every result, with the template it came from — there are only a
+      // couple of dozen, and each one is a real endpoint rather than a guess.
+      results,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
