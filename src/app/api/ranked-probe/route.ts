@@ -1,33 +1,22 @@
 /**
- * Research probe: find the live sub-paths of For Honor's own title services.
+ * Season 0 re-check, 2026-09-11 — one day after Ranked launched.
  *
- * Not for main. Runs on this branch's Vercel PREVIEW deployment, driven by the
- * workflow beside it, because the container this was written in cannot reach
- * ubi.com at all.
+ * Not for main. Runs on this branch's Vercel PREVIEW deployment via the
+ * workflow beside it, because this container cannot reach ubi.com.
  *
- * The previous run established the thing that makes this worth doing: the
- * title services named in fh-configuration (heroranking, heroleaderboard,
- * skillrating, playerstats2, …) are LIVE and answer an ordinary session
- * ticket. They are not behind game-client impersonation, contrary to this
- * project's standing note. What is missing is their routes.
+ * Yesterday's pass is written up in RANKED-PROBE-FINDINGS.md. This is not
+ * another dump of the same thing: it carries yesterday's measurements as a
+ * baseline and reports only what MOVED. A day is exactly the window in which
+ * Ubisoft would populate Season 0 boards or flip a switch, and a diff makes
+ * that visible where a second 200-name dump would not.
  *
- * Their 404 is an oracle. The UbiServices gateway answers an unknown path with
- *   {"errorCode":1003,"message":"Resource '<url>' not found."}
- * whereas the title service itself answers with
- *   {"resource":"<its own root>","errorCode":"UnspecifiedError",
- *    "message":"<the part it could not route>","serverUtcTime":...}
- * So a reply in the second shape means "reached the service, wrong path", and
- * ANYTHING ELSE — a 200, a 400 complaining about parameters, a 401, a 403 —
- * means the path exists. That distinction is the whole result, so this reports
- * candidates as UNMATCHED or as a HIT with the body.
+ * Baselines below were measured yesterday, both spaces identical:
+ *   us-sdkClientUrls.fields    200 templates
+ *   fh-customFeatureSwitches    28 switches
+ *   fh-configuration            73 fields
  *
- * Everything is asked with the ordinary session ticket and NOTHING else. The
- * configuration also hands over application_build_id_* and sandbox_name_*,
- * which is what the game client presents; deliberately not sent. A 401 asking
- * for them is a real answer and the end of this line of enquiry.
- *
- * Output is schema only — paths, statuses and service error text. The log is
- * public, so no stat values and no ids: the profile id is masked to {id}.
+ * Output is schema only — names, counts, statuses. The log is public, so no
+ * stat values and no ids.
  */
 import { NextResponse } from 'next/server';
 import { verifyGithubActionsToken } from '@/server/github-oidc';
@@ -43,175 +32,115 @@ export const maxDuration = 120;
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-/**
- * Endpoints from Ubisoft's own URL catalogue worth calling for a For Honor
- * tracker. The catalogue stores a URL TEMPLATE for each, so these need no
- * guessing at all — which is the point, after 594 guessed title-service paths
- * returned exactly zero hits.
- *
- * profilesReputation and profilesProgressionGraph are the interesting pair:
- * both were invisible to the earlier passes because neither name contains
- * "rank", "season" or "leaderboard".
- */
-const WANTED = [
-  'profilesReputation',
-  'profilesProgressionGraph',
-  'profilesMeLeaderboard',
-  'profilesLeaderboard',
-  'spacesLeaderboard',
-  'profilesSeasonChallenges',
-  'spacesSeasonChallenges',
-  'profilesChallenges',
-  'profilesMeBattlepassesSeasons',
-  'spacesBattlepassesSeasons',
-  'profilesStats',
-  'allProfilesStats',
-  'spacesStats',
-];
+const BASE_URLS = new Set(`achievementsDefinitions achievementsPlayer allConnections allProfilesApplications allProfilesEntities allProfilesStats allSpacesEntities allSpacesItems allSpacesOffers allgroupTypes applications applicationsMetadata applicationsParameters avatars blocklist blocklistBlockedBy blocklistUnblock calendar calendarLists challenge challengeManualBanking challengeProgression cloudSavesProfilesCloudSaveFiles communityChallengesProfilesParticipations communityChallengesSpaces communityChallengesSpacesProgressions configsEvents connections events eventsDefinitions friends friendsConfigs gamesPlayed gamesPlayedProfiles groupType groups groupsGroupsInvitations groupsInvitationsConfig groupsInvitationsGroupTypeConfig groupsInvitationsInvites groupsInvitationsJoinRequests groupsInvitationsLockState groupsInvitationsProfiles groupsInvitationsUpdateInvite groupsInvitationsUpdateJoinRequest groupsMatchmaking groupsMatchmakingMatches groupsMembers groupsRetentionExpiry groupsRichPresences groupsUgcGenericContents groupsUgcGenericContentsOwn localization localizationAll matchmakingGroupsMatchesPrecise matchmakingProfilesGlobalHarboursocial matchmakingSpaceGlobalHarboursocial moderation moderationPOST news oauthProfilesIdToken partyXboxSync personaProfile personaSpace playerActivityContextsProfiles playerActivityProfiles playerConsents playerConsentsCategory playerConsentsNextAcceptances playerConsentsNextConfig playerConsentsNextProfile playerPrivilegesProfile playerReportsProfile playerReportsSpaceCategories policies profiles profilesActions profilesApplications profilesBattlepassesSeasons profilesBattlepassesSeasonsTiers profilesChallenges profilesEntities profilesExternal profilesFriends profilesGroups profilesInventory profilesInventoryExpiredDetails profilesInventoryInstances profilesInventoryInstancesTransactions profilesInventoryPrimarystore profilesInventoryReserves profilesInventoryTransactions profilesLeaderboard profilesMatches profilesMatchmakingMatches profilesMatchmakingOnlineAccess profilesMeBattlepassesSeasons profilesMeBattlepassesSeasonsSeasonId profilesMeCommunityChallenges profilesMeEvents profilesMeInventoryPrimarystore profilesMeLeaderboard profilesMeRoamingProfiles profilesNotifications profilesNotificationsBatch profilesOffersDiscounts profilesOffersDiscountsMatches profilesOffersDiscountsResolutions profilesParties profilesPlayerPreferences profilesPlayerPreferencesStandard profilesPreciseMatchmakingClient profilesPreciseMatchmakingMatch profilesProfileChallenges profilesProgressionGraph profilesReputation profilesRewards profilesRichPresences profilesSeasonChallenges profilesStats profilesStatsCard profilesToken profilesUgcExternalVideos profilesUgcFavorites profilesUgcGenericContents profilesUgcGenericContentsOwn profilesUgcPhotos profilesUgcPhotosOwn profilesUgcRatings profilesUgcReportContent profilesUgcRequestReportedContent profilesUgcUpdateFavorite profilesUgcUpdateRating profilesUgcViews recommendations remoteLogs sanctionsAppliedSanctions sandboxes secondaryStoreInventoryRulesExecution sessions spacesActions spacesBattlepasses spacesBattlepassesSeasons spacesBattlepassesSeasonsSeasonId spacesChallengepools spacesChallenges spacesCommunityChallenges spacesConfigsPrimarystore spacesConfigsSsiAttributes spacesConfigsSsiListsOfAttributes spacesConfigsSsiRules spacesConfigsUgc spacesEntities spacesGroupsInvitations spacesItems spacesLeaderboard spacesMatches spacesNews spacesOffers spacesParameters spacesParties spacesPartiesPartyIdMembersProfileId spacesPlayerActivity spacesPlayerPreferences spacesPlayerPreferencesStandard spacesRewards spacesRichPresences spacesSeasonChallenges spacesStats spacesStatsCard tLog telemetry tokenProfile tokenSpace trackingSession tradesItemsGifts tradesItemsGiftsConfig tradesOfferGifts tradesOfferGiftsConfig tradesOfferGiftsSimulation tradesProfilesMarketableItems tradesSpaceMarketableItems ubiConnectApplicableTimeLimitedChallengesProfiles ubiConnectCommunityChallengesProfile ubiConnectCommunityChallengesSpace ubiConnectRewardsProfile ubiConnectRewardsSpace ubiConnectTimeLimitedChallengesProfile ubiConnectTimeLimitedChallengesSpace users usersMeOnlineStatuses usersMeOnlineStatusesManualStatus usersOnlineStatuses usersPolicies voicechatConfigPlayfab voicechatConfigVivox voicechatNetworkPlayfab voicechatTokenVivox websocketNotifications websocketServer`.split(' '));
+const BASE_SWITCHES = new Set(`Game Cloud Bazaar Balmung Mercury Metagame RDV_Event RDV_Login RDV_Health Tournament ActivityAfk Arbitration Matchmaking SkillRating MatureFilter PlayerProfile RDV_Challenge US_EventsFlush PlayerReporting Storm_Onion_Auth ActivityAfkSilent ExclusiveFullscreen FileCacheMemProtect ForceCompatFallback StormDedicatedRouter PersistentPlayerGroup SeamlessPlaylistUpdates MatchmakingBlacklistPlayers`.split(' '));
+const BASE_CONFIG_FIELDS = 73;
 
-interface Result {
-  service: string;
-  path: string;
-  status: number | null;
-  /** UNMATCHED means the service answered with its own not-found shape. */
-  verdict: 'UNMATCHED' | 'GATEWAY-404' | 'NO-ROUTE' | 'HIT' | 'ERROR';
-  body?: string;
-}
+/** Leaderboard names that 404'd yesterday. Season 0 may have created them. */
+const LEADERBOARDS = [
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DL2',
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DM2',
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DOM',
+  'RankingPointsPerGameModeSeasonal',
+  'SeasonalLeaderboard',
+];
 
 export async function GET(request: Request) {
   const presented = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
   const verdict = await verifyGithubActionsToken(presented, { audience: PROBE_AUDIENCE });
-  if (!verdict.ok) {
-    return NextResponse.json({ ok: false, reason: verdict.reason }, { status: 401 });
-  }
+  if (!verdict.ok) return NextResponse.json({ ok: false, reason: verdict.reason }, { status: 401 });
 
   const trace = newTraceCollector();
   if (!(await readSession())) {
-    return NextResponse.json({ ok: false, reason: 'No session on this deployment.' }, { status: 503 });
+    return NextResponse.json({ ok: false, reason: 'No session here.' }, { status: 503 });
   }
-
-  // Sliding the session forward is what yields the ticket's own profile id;
-  // the stored session carries an empty one by design.
   await forceRefresh(trace);
   const session = await login(trace);
-  const stored = await readSession();
-  const profileId = session.profileId || stored?.profileId || '';
+  const profileId = session.profileId || (await readSession())?.profileId || '';
   const headers = authHeaders(session);
 
-  const mask = (text: string) => (profileId ? text.split(profileId).join('{id}') : text);
+  const report: Record<string, unknown> = {};
 
-  // Read each space's configuration for the public title-service roots.
-  const services: Record<string, string> = {};
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
+    const short = spaceId.slice(0, 8);
+    const space: Record<string, unknown> = {};
+
     const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
       headers,
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) continue;
-    const body = (await response.json()) as Record<string, unknown>;
-    const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
-    const config = ((inner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
-      {}) as Record<string, string>;
-    for (const [key, value] of Object.entries(config)) {
-      if (/_public_v\d$/.test(key) && typeof value === 'string' && value.startsWith('https://')) {
-        services[`${spaceId.slice(0, 8)}/${key}`] = value;
-      }
-    }
-  }
+    if (response.ok) {
+      const body = (await response.json()) as Record<string, unknown>;
+      const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
+      const group = (name: string) =>
+        ((inner[name] as Record<string, unknown>)?.['fields'] ?? {}) as Record<string, unknown>;
 
-  const results: Result[] = [];
+      const urlNames = Object.keys(group('us-sdkClientUrls'));
+      const switchNames = Object.keys(group('fh-customFeatureSwitches'));
+      const configFields = Object.keys(group('fh-configuration'));
 
-  // Read the URL templates rather than guessing paths.
-  const templates: Record<string, string> = {};
-  for (const spaceId of FOR_HONOR_SPACE_IDS) {
-    const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
-      headers,
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) continue;
-    const body = (await response.json()) as Record<string, unknown>;
-    const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
-    const urls = ((inner['us-sdkClientUrls'] as Record<string, unknown>)?.['fields'] ??
-      {}) as Record<string, string>;
-    for (const name of WANTED) {
-      if (typeof urls[name] === 'string') templates[`${spaceId.slice(0, 8)}/${name}`] = urls[name];
-    }
-  }
-
-  async function call(label: string, template: string, version: string) {
-    // Fill in what we know. Anything still in braces is reported unresolved
-    // rather than guessed at.
-    // {baseurl_aws} and {version} are resolved, not guessed: the catalogue
-    // gives allProfilesStats as {baseurl_aws}/{version}/profiles/stats, and
-    // this project already calls that endpoint successfully as
-    // https://public-ubiservices.ubi.com/v1/profiles/stats. So the host is
-    // UBI_SERVICES and the version is the ordinary v1/v2/v3 ladder.
-    const url = template
-      .replace(/\{baseurl_aws\}/g, UBI_SERVICES)
-      .replace(/\{version\}/g, version)
-      .replace(/\{spaceId\}/g, label.startsWith('882ad5b5') ? FOR_HONOR_SPACE_IDS[0]! : FOR_HONOR_SPACE_IDS[1]!)
-      .replace(/\{profileId\}/g, profileId)
-      .replace(/\{profileIds\}/g, profileId)
-      .replace(/\{userId\}/g, profileId);
-
-    if (/\{[^}]+\}/.test(url)) {
-      results.push({
-        service: label,
-        path: template,
-        status: null,
-        verdict: 'ERROR',
-        body: `unresolved placeholder: ${url.match(/\{[^}]+\}/g)?.join(',')}`,
-      });
-      return;
+      space['urlTemplates'] = {
+        count: urlNames.length,
+        added: urlNames.filter((n) => !BASE_URLS.has(n)),
+        removed: [...BASE_URLS].filter((n) => !urlNames.includes(n)),
+      };
+      space['featureSwitches'] = {
+        count: switchNames.length,
+        added: switchNames.filter((n) => !BASE_SWITCHES.has(n)),
+        removed: [...BASE_SWITCHES].filter((n) => !switchNames.includes(n)),
+        // Values matter as much as names here: a switch flipping on is the
+        // change a new mode would show up as.
+        values: Object.fromEntries(
+          Object.entries(group('fh-customFeatureSwitches')).filter(([k]) =>
+            /rank|season|tournament|skill|compet|ladder|elo/i.test(k),
+          ),
+        ),
+      };
+      space['configFields'] = { count: configFields.length, baseline: BASE_CONFIG_FIELDS };
+      // Any title service whose name is ranked-ish, with its URL.
+      space['rankedServices'] = Object.fromEntries(
+        Object.entries(group('fh-configuration')).filter(([k]) =>
+          /rank|season|leaderboard|skill|compet/i.test(k),
+        ),
+      );
+    } else {
+      space['parameters'] = `HTTP ${response.status}`;
     }
 
-    try {
-      const response = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
-      const text = await response.text();
-      let parsed: Record<string, unknown> | null = null;
+    // The two endpoints that were live yesterday, and the boards that were not.
+    const checks: Record<string, string> = {};
+    const ask = async (name: string, url: string) => {
       try {
-        parsed = JSON.parse(text) as Record<string, unknown>;
-      } catch {
-        /* non-JSON is itself interesting */
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
+        const t = await r.text();
+        let keys = '';
+        try {
+          keys = Object.keys(JSON.parse(t) as object).join(',');
+        } catch {
+          keys = '(non-JSON)';
+        }
+        checks[name] = `${r.status} keys:${keys}`;
+      } catch (error) {
+        checks[name] = `ERROR ${String(error).slice(0, 60)}`;
       }
-      const gatewayMiss = parsed?.['errorCode'] === 1003;
-      results.push({
-        service: label,
-        path: mask(template),
-        status: response.status,
-        verdict: gatewayMiss ? 'GATEWAY-404' : 'HIT',
-        // Response KEYS only, never values — this log is public and these
-        // endpoints may return real player data.
-        body: parsed
-          ? `keys: ${Object.keys(parsed).join(',')}`
-          : mask(text).slice(0, 200),
-      });
-    } catch (error) {
-      results.push({ service: label, path: template, status: null, verdict: 'ERROR', body: String(error).slice(0, 100) });
-    }
-  }
+    };
 
-  // Try the version ladder; a 404 on v1 is not the same as the route not
-  // existing, as this project already learned with applications v2 -> v3.
-  for (const [label, template] of Object.entries(templates)) {
-    for (const version of ['v1', 'v2', 'v3']) {
-      await call(`${label} ${version}`, template, version);
+    await ask('communitystats v1', `${UBI_SERVICES}/v1/spaces/${spaceId}/communitystats`);
+    await ask('battlepasses/seasons v2', `${UBI_SERVICES}/v2/spaces/${spaceId}/battlepasses/seasons`);
+    await ask('profiles/me/ranks v1', `${UBI_SERVICES}/v1/profiles/me/ranks`);
+    await ask('profiles/{id}/reputation v1', `${UBI_SERVICES}/v1/profiles/${profileId}/reputation`);
+    for (const name of LEADERBOARDS) {
+      await ask(
+        `leaderboard ${name}`,
+        `${UBI_SERVICES}/v1/spaces/${spaceId}/leaderboards/${encodeURIComponent(name)}?profileId=${profileId}`,
+      );
     }
+    space['checks'] = checks;
+    report[short] = space;
   }
 
   return NextResponse.json(
-    {
-      ok: true,
-      at: new Date().toISOString(),
-      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-      profileIdResolved: Boolean(profileId),
-      templatesFound: Object.keys(templates).length,
-      tried: results.length,
-      gateway404: results.filter((r) => r.verdict === 'GATEWAY-404').length,
-      // Anything that is NOT the gateway's plain "no such resource" — those
-      // are the ones that went somewhere.
-      interesting: results.filter((r) => r.verdict !== 'GATEWAY-404'),
-    },
+    { ok: true, at: new Date().toISOString(), commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null, report },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }
