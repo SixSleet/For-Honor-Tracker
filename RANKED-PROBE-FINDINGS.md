@@ -190,3 +190,49 @@ being the frozen space.
 **What this is and is not.** It is a real, zero-auth source of Season 0's
 ranked playlist configuration. It is not a rank endpoint: neither bundle
 contains an HTTP URL, so it supplies no resource path and no per-player data.
+
+## Methods, headers, and the client identifiers (2026-09-11)
+
+The game shows the Season 0 boards, so the game client reads them; "no endpoint
+found" was always a statement about this search, not about Ubisoft. Three
+things the earlier passes never varied, now tested:
+
+1. **Method.** Every prior probe was a GET. Kong routes on method as well as
+   path, so a POST-only route would have answered a GET exactly like a missing
+   one. Tried OPTIONS and POST against every ranked service root.
+2. **Response headers.** Never read before. `Allow` / `Access-Control-Allow-Methods`
+   would name accepted verbs directly.
+3. **Client identifiers.** With the operator's authorization, added
+   `application_build_id` and `sandbox_name` (PC, from public config) as
+   request headers — the fields that distinguish the game client from this
+   probe. No herologin/EOS/anti-cheat flow; two config strings only.
+
+### Result: no door opened
+
+- GET and POST, **with and without** the client identifiers, to every ranked
+  service root and `/leaderboards`, `/ranks`, `/profiles/{id}` suffix: **404**
+  throughout. The build id and sandbox changed nothing.
+- **OPTIONS → 403, errorCode 4003, "The origin supplied is not allowed to
+  access this service"** — on every path uniformly, including suffixes that
+  cannot exist. Because it is uniform it is NOT per-route proof of existence;
+  it shows only that the gateway rejects preflight without an allowed Origin.
+- `POST /v1/spaces/{id}/leaderboards/` returns an Express `Cannot POST …` page
+  (path rewritten to `/public/v1/…`), so a live Node backend sits behind that
+  route, but it does not accept our requests.
+- The two spaces sit behind different gateways: PC answers `server: kong/3.9.3`,
+  crossplay `server: openresty/1.29.2.1`.
+
+### What remains, and why it stopped here
+
+The game reads these boards by completing the herologin / EOS title-auth flow
+(the game's own App-Id plus an EOS token) and/or by presenting an Origin the
+gateway's allowlist trusts. Both are the game-client impersonation / access-
+control-bypass this project has ruled out from the start, and the build_id +
+sandbox authorization explicitly stopped short of them. Not attempted.
+
+**Standing conclusion: the Season 0 rank data is reachable only by completing
+the game's auth/anti-cheat handshake or spoofing a trusted web origin. No
+session-ticket-reachable endpoint serves it.** The usable new surface from all
+of this remains the public, no-auth playlist bundle (season/playlist
+definitions) and the space-scoped communitystats and battlepasses/seasons
+endpoints — none of it per-player rank.
