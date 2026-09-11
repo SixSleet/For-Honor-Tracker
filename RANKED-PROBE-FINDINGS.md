@@ -142,3 +142,51 @@ configuration fits: among the fields it lacks is `hn_ranking_public_v2`,
 which exists only on crossplay. Note the 73 baseline above was measured on
 crossplay; there is no recorded PC figure from before, so this is a
 difference between spaces, not a proven change over time.
+
+## The playlist bundles — verified, and they have moved
+
+The parallel branch `research/ranked-season-2026-09-10` found something this
+investigation missed entirely: a **public playlist bundle** carrying the
+Season 0 ranked definitions. `playlist_versions_url` and
+`hn_default_playlist_bundle_name` were both in the configuration dumped above;
+the fields were read and the URL was never followed.
+
+Verified independently on 2026-09-11, fetched with **no Authorization header
+at all**:
+
+| | PC space | Crossplay space |
+| --- | --- | --- |
+| bundle the config names now | `3501.0.0-prod-turbo-breach-v2` | **`3901.0.0-prod-v3`** |
+| `hn_next_playlist_bundle_name` | `3402.0.0-prod-v3` | (none) |
+| anonymous fetch | **403** | **200**, 253,175 bytes |
+| sha256 | — | `71006ea4f9b59931006e030d5c9612224f2ea527a423efd70ab069c6644901f7` |
+
+Three results worth separating:
+
+1. **The crossplay bundle is readable with no credentials whatsoever.** Not a
+   ticket, not a session, not an App ID. That makes it categorically different
+   from everything else in this investigation: usable without the shared
+   session, and incapable of carrying anything personal.
+
+2. **It has rolled since yesterday** — `3901.0.0-prod-v2` to
+   `3901.0.0-prod-v3`. The other branch's snapshot is one bundle stale. This
+   is the only thing found to have changed in the 24 hours since launch.
+
+3. **The three ranked definitions survive into v3**: 22 "1v1 Duel (Ranked)"
+   (divisionSpread 4), 135 "4v4 Dominion (Ranked)" (10), 136 "1v1 Duel
+   (Ranked V2)" (4). Top-level keys are `capital`, `capital2`, `fronts`,
+   `gameModeCategories`, `playlists`, `saveDate`.
+
+One discrepancy, recorded rather than explained: the other branch's reading of
+v2 carries `minimumReputation: 5` on both new playlists, and this reading of
+v3 did not surface that field on the same objects. `divisionSpread` came
+through, so the object shape is right. Whether v3 dropped the field or the two
+extractions walked different structures is not established here, and
+`minimumReputation` should not be quoted from v3 until it is.
+
+The PC space points at a far older bundle and 403s anonymously, which fits it
+being the frozen space.
+
+**What this is and is not.** It is a real, zero-auth source of Season 0's
+ranked playlist configuration. It is not a rank endpoint: neither bundle
+contains an HTTP URL, so it supplies no resource path and no per-player data.
