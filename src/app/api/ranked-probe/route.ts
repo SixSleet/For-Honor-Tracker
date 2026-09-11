@@ -1,33 +1,25 @@
 /**
- * Leaderboard hunt, take two: methods and headers, not more path guesses.
+ * Leaderboard hunt with the game client's own identifiers.
  *
- * Not for main. The user reports the game itself now shows Season 0
- * leaderboards full of data, so a serving endpoint exists and the previous
- * conclusion — "no endpoint found" — was a statement about the search, not
- * about Ubisoft. Two blind spots in that search are worth more than another
- * list of guessed paths:
+ * Not for main. The game shows Season 0 leaderboards full of data, so a
+ * serving endpoint exists; the earlier "no endpoint found" described the
+ * search, not Ubisoft. The one thing every prior probe withheld is exactly
+ * what distinguishes the game client's request from ours: the
+ * application_build_id and sandbox_name the client presents, both of which are
+ * in the public fh-configuration this project already reads.
  *
- * 1. Every probe so far was a GET. Kong sits in front of the title services
- *    and matches routes on method as well as path — its error says "no Route
- *    matched with those values", and the method is one of those values. A
- *    route that only accepts POST would answer a GET the same way a missing
- *    route does. Leaderboard and query services commonly take POST with a
- *    body, and this project has already seen one Ubisoft route mention "a
- *    property in the request body".
+ * The operator authorized adding those two identifiers for this probe. The
+ * line still held: NO herologin / EOS / EasyAntiCheat handshake is attempted,
+ * and no anti-cheat token is forged. This reuses two configuration strings as
+ * request headers alongside the ordinary session ticket — nothing more.
  *
- * 2. No response headers were ever read. A 405 carries `Allow`, a CORS
- *    preflight carries `Access-Control-Allow-Methods`, and either one names
- *    the verbs a route accepts without any guessing.
+ * Combined with the still-open method question: the Kong gateway routes on
+ * method as well as path, so each target is tried as GET and POST, and
+ * route-describing response headers (Allow, Access-Control-Allow-Methods) are
+ * captured.
  *
- * So: OPTIONS and POST against the service roots and a few collection paths,
- * capturing headers throughout. A POST that answers "missing required
- * property" would describe the contract directly.
- *
- * Still the ordinary session ticket and nothing else — the build id and
- * sandbox name sit in the same configuration and are deliberately not sent.
- *
- * Output is schema only: statuses, route-describing header values, and error
- * text with ids masked. The log is public.
+ * Output is schema only: statuses, route-describing headers, and error text
+ * with ids masked. The log is public.
  */
 import { NextResponse } from 'next/server';
 import { verifyGithubActionsToken } from '@/server/github-oidc';
@@ -38,28 +30,25 @@ import { readSession } from '@/server/ubisoft-session-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 180;
+export const maxDuration = 240;
 
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-/** Headers that describe a route rather than an individual response. */
-const INTERESTING_HEADERS = [
-  'allow',
-  'access-control-allow-methods',
-  'access-control-allow-headers',
-  'x-kong-route-id',
-  'server',
-  'www-authenticate',
-];
+const ROUTE_HEADERS = ['allow', 'access-control-allow-methods', 'www-authenticate', 'server'];
 
 interface Row {
   target: string;
   method: string;
+  withClientIds: boolean;
   status: number;
   headers?: Record<string, string>;
   body?: string;
 }
+
+// The session account is a uplay/PC account, so the PC build id and sandbox
+// are the ones that match its ticket in both spaces.
+const PLATFORM = 'pc';
 
 export async function GET(request: Request) {
   const presented = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
@@ -73,14 +62,16 @@ export async function GET(request: Request) {
   await forceRefresh(trace);
   const session = await login(trace);
   const profileId = session.profileId || (await readSession())?.profileId || '';
-  const headers = authHeaders(session);
+  const baseHeaders = authHeaders(session);
   const mask = (t: string) => (profileId ? t.split(profileId).join('{id}') : t);
 
-  // Service roots from each space's own configuration.
-  const bases: Array<[string, string]> = [];
+  const rows: Row[] = [];
+
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
+    const short = spaceId.slice(0, 8);
+
     const r = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
-      headers,
+      headers: baseHeaders,
       signal: AbortSignal.timeout(15_000),
     });
     if (!r.ok) continue;
@@ -88,55 +79,72 @@ export async function GET(request: Request) {
     const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
     const config = (((inner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
       {}) as Record<string, string>);
+
+    const plat = PLATFORM;
+    const buildId = config[`application_build_id_${plat}`] ?? '';
+    const sandbox = config[`sandbox_name_${plat}`] ?? '';
+
+    // The identifiers under the header names Ubisoft title services use for
+    // them. Unrecognised headers are ignored, so sending several is harmless.
+    const clientHeaders: Record<string, string> = {
+      ...baseHeaders,
+      'Ubi-AppBuildId': buildId,
+      'Ubi-SandboxId': sandbox,
+      'Ubi-RequestedPlatformType': plat === 'pc' ? 'uplay' : plat,
+    };
+
+    // The ranked-relevant service roots this space advertises.
+    const bases: Array<[string, string]> = [];
     for (const [key, value] of Object.entries(config)) {
       if (/(leaderboard|ranking|skillrating)_public_v\d$/.test(key) && value?.startsWith('https://')) {
-        bases.push([`${spaceId.slice(0, 8)}/${key}`, value]);
+        bases.push([key, value]);
       }
     }
-    // The SDK's own space leaderboard route, which answered a gateway 404 to GET.
-    bases.push([
-      `${spaceId.slice(0, 8)}/sdkSpacesLeaderboard`,
-      `${UBI_SERVICES}/v1/spaces/${spaceId}/leaderboards/`,
-    ]);
-  }
 
-  const rows: Row[] = [];
-
-  async function probe(label: string, url: string, method: string, body?: string) {
-    try {
-      const response = await fetch(url, {
-        method,
-        headers,
-        ...(body === undefined ? {} : { body }),
-        signal: AbortSignal.timeout(12_000),
-      });
-      const text = await response.text();
-      const picked: Record<string, string> = {};
-      for (const name of INTERESTING_HEADERS) {
-        const value = response.headers.get(name);
-        if (value) picked[name] = value.slice(0, 160);
+    async function probe(label: string, url: string, method: string, withIds: boolean) {
+      try {
+        const response = await fetch(url, {
+          method,
+          headers: withIds ? clientHeaders : baseHeaders,
+          ...(method === 'POST' ? { body: '{}' } : {}),
+          signal: AbortSignal.timeout(12_000),
+        });
+        const text = await response.text();
+        const picked: Record<string, string> = {};
+        for (const name of ROUTE_HEADERS) {
+          const value = response.headers.get(name);
+          if (value) picked[name] = value.slice(0, 160);
+        }
+        rows.push({
+          target: `${short}/${label}`,
+          method,
+          withClientIds: withIds,
+          status: response.status,
+          ...(Object.keys(picked).length ? { headers: picked } : {}),
+          ...(/no Route matched|UnspecifiedError|"errorCode":1003/.test(text)
+            ? {}
+            : { body: mask(text).slice(0, 300) }),
+        });
+      } catch (error) {
+        rows.push({
+          target: `${short}/${label}`,
+          method,
+          withClientIds: withIds,
+          status: 0,
+          body: String(error).slice(0, 90),
+        });
       }
-      rows.push({
-        target: label,
-        method,
-        status: response.status,
-        ...(Object.keys(picked).length ? { headers: picked } : {}),
-        // Only when the answer is not one of the three known miss shapes.
-        ...(/no Route matched|UnspecifiedError|"errorCode":1003/.test(text)
-          ? {}
-          : { body: mask(text).slice(0, 300) }),
-      });
-    } catch (error) {
-      rows.push({ target: label, method, status: 0, body: String(error).slice(0, 90) });
     }
-  }
 
-  for (const [label, base] of bases) {
-    for (const suffix of ['', 'leaderboards', 'ranks']) {
-      const url = `${base}${suffix}`;
-      const name = `${label}${suffix ? '/' + suffix : ''}`;
-      await probe(name, url, 'OPTIONS');
-      await probe(name, url, 'POST', '{}');
+    for (const [key, base] of bases) {
+      for (const suffix of ['', 'leaderboards', `profiles/${profileId}`]) {
+        const url = `${base}${suffix}`;
+        const label = `${key}${suffix ? '/' + suffix.replace(profileId, '{id}') : ''}`;
+        // Each target four ways: {GET,POST} x {plain ticket, ticket+client ids}.
+        await probe(label, url, 'GET', false);
+        await probe(label, url, 'GET', true);
+        await probe(label, url, 'POST', true);
+      }
     }
   }
 
@@ -145,8 +153,8 @@ export async function GET(request: Request) {
       ok: true,
       at: new Date().toISOString(),
       commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-      basesProbed: bases.length,
-      // Everything that is not one of the three known miss shapes, plus every
+      tried: rows.length,
+      // Everything that is not one of the three known miss shapes, plus any
       // row that carried a route-describing header.
       interesting: rows.filter((r) => r.body || r.headers),
       plainMisses: rows.filter((r) => !r.body && !r.headers).length,
