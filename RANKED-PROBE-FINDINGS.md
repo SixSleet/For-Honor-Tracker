@@ -100,3 +100,45 @@ Also: the account whose ticket seeds the site does **not** own For Honor —
 `gamesplayed` returns one unrelated space — so it has no per-player stats to
 find. Testing anything player-scoped needs a profile id belonging to someone
 who actually plays.
+
+## Re-check, 2026-09-11 (one day after launch)
+
+Run as a diff against the measurements above rather than a fresh dump.
+**Nothing moved in 24 hours.**
+
+| | PC space | Crossplay space |
+| --- | --- | --- |
+| URL templates | 200, **0 added, 0 removed** | 200, **0 added, 0 removed** |
+| Feature switches | 28, **0 added, 0 removed** | 28, **0 added, 0 removed** |
+| `Tournament` / `SkillRating` | `true` / `true` | `true` / `true` |
+| `communitystats` v1 | 200 `{stats}` | 200 `{stats}` |
+| `battlepasses/seasons` v2 | 200 `{seasons}` | 200 `{seasons}` |
+| `profiles/me/ranks` | 404 | 404 |
+| `profiles/{id}/reputation` | 404 | 404 |
+| all five leaderboard names | 404 | 404 |
+
+Season 0 being a day old changed none of it: no board was created, no switch
+flipped, no endpoint appeared or disappeared.
+
+### Correction: the two spaces do not share a host
+
+Yesterday's notes described the title services as being on
+`public-ubiservices.ubi.com`. That is true of the **crossplay** space only.
+The **PC** space routes its public title services through a different host
+entirely:
+
+    PC         https://live.forhonor.ubisoft.com/v1/spaces/882ad5b5-.../title/hero/hero-pc-live/heroranking/public/v1/
+    crossplay  https://public-ubiservices.ubi.com/v1/spaces/c2294cd6-.../title/hero/hero-live/heroranking/public/v1/
+
+Both hosts were in fact covered by the 594-path enumeration — it read its
+bases from each space's own configuration — so this changes the description,
+not the result. Zero hits on either.
+
+### The two spaces' configurations are different sizes
+
+`fh-configuration` is **54 fields on PC** against **73 on crossplay**. The PC
+space is the frozen one (last written 2025-09-09), so a smaller, older
+configuration fits: among the fields it lacks is `hn_ranking_public_v2`,
+which exists only on crossplay. Note the 73 baseline above was measured on
+crossplay; there is no recorded PC figure from before, so this is a
+difference between spaces, not a proven change over time.
