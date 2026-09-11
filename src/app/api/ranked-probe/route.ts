@@ -1,28 +1,34 @@
 /**
- * Independent check of the playlist-bundle finding from the parallel research
- * branch `research/ranked-season-2026-09-10`.
+ * Leaderboard hunt, take two: methods and headers, not more path guesses.
  *
- * Not for main. That branch reported two NEW ranked playlist definitions for
- * Season 0 — 135 "4v4 Dominion (Ranked)" and 136 "1v1 Duel (Ranked V2)" —
- * pulled from a public bundle at playlists-2.forhonor.ubisoft.com. The finding
- * looks right and its evidence carries sha256 hashes, but it is another
- * agent's result, so it is verified here rather than taken on trust, and its
- * snapshot is a day old.
+ * Not for main. The user reports the game itself now shows Season 0
+ * leaderboards full of data, so a serving endpoint exists and the previous
+ * conclusion — "no endpoint found" — was a statement about the search, not
+ * about Ubisoft. Two blind spots in that search are worth more than another
+ * list of guessed paths:
  *
- * Three things this settles that the report could not:
- *   1. whether the bundle the live configuration points at TODAY is still
- *      3901.0.0-prod-v2, or has moved since;
- *   2. whether the bundle is readable with NO credentials at all — it is
- *      fetched here with no Authorization header, deliberately, because a
- *      source that needs no session is worth far more to this project than
- *      one that does;
- *   3. whether the three ranked definitions are actually in it.
+ * 1. Every probe so far was a GET. Kong sits in front of the title services
+ *    and matches routes on method as well as path — its error says "no Route
+ *    matched with those values", and the method is one of those values. A
+ *    route that only accepts POST would answer a GET the same way a missing
+ *    route does. Leaderboard and query services commonly take POST with a
+ *    body, and this project has already seen one Ubisoft route mention "a
+ *    property in the request body".
  *
- * Reports the bundle name, status, sha256 and the ranked entries' id, name and
- * minimumReputation. Those are game configuration, identical for every player,
- * so nothing personal reaches this public log.
+ * 2. No response headers were ever read. A 405 carries `Allow`, a CORS
+ *    preflight carries `Access-Control-Allow-Methods`, and either one names
+ *    the verbs a route accepts without any guessing.
+ *
+ * So: OPTIONS and POST against the service roots and a few collection paths,
+ * capturing headers throughout. A POST that answers "missing required
+ * property" would describe the contract directly.
+ *
+ * Still the ordinary session ticket and nothing else — the build id and
+ * sandbox name sit in the same configuration and are deliberately not sent.
+ *
+ * Output is schema only: statuses, route-describing header values, and error
+ * text with ids masked. The log is public.
  */
-import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { verifyGithubActionsToken } from '@/server/github-oidc';
 import { newTraceCollector } from '@/server/http';
@@ -32,17 +38,27 @@ import { readSession } from '@/server/ubisoft-session-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-interface Ranked {
-  id?: number;
-  name?: string;
-  minimumReputation?: number;
-  maximumGroupSize?: number;
-  divisionSpread?: number;
+/** Headers that describe a route rather than an individual response. */
+const INTERESTING_HEADERS = [
+  'allow',
+  'access-control-allow-methods',
+  'access-control-allow-headers',
+  'x-kong-route-id',
+  'server',
+  'www-authenticate',
+];
+
+interface Row {
+  target: string;
+  method: string;
+  status: number;
+  headers?: Record<string, string>;
+  body?: string;
 }
 
 export async function GET(request: Request) {
@@ -56,84 +72,85 @@ export async function GET(request: Request) {
   }
   await forceRefresh(trace);
   const session = await login(trace);
+  const profileId = session.profileId || (await readSession())?.profileId || '';
   const headers = authHeaders(session);
+  const mask = (t: string) => (profileId ? t.split(profileId).join('{id}') : t);
 
-  const report: Record<string, unknown> = {};
-
+  // Service roots from each space's own configuration.
+  const bases: Array<[string, string]> = [];
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
-    const short = spaceId.slice(0, 8);
-    const entry: Record<string, unknown> = {};
-
-    // What bundle does the live configuration point at right now?
-    const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
+    const r = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
       headers,
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) {
-      report[short] = { parameters: `HTTP ${response.status}` };
-      continue;
-    }
-    const body = (await response.json()) as Record<string, unknown>;
+    if (!r.ok) continue;
+    const body = (await r.json()) as Record<string, unknown>;
     const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
     const config = (((inner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
       {}) as Record<string, string>);
-
-    const bundleName = config['hn_default_playlist_bundle_name'];
-    const bundleHost = config['hn_playlist_bundles_url'] ?? config['playlist_versions_url'];
-    entry['bundleName'] = bundleName ?? null;
-    entry['bundleHost'] = bundleHost ?? null;
-    entry['nextBundle'] = config['hn_next_playlist_bundle_name'] || '(none)';
-
-    if (!bundleName || !bundleHost) {
-      report[short] = entry;
-      continue;
-    }
-
-    // Fetch it with NO credentials. If this works, the source needs no session.
-    const url = `${bundleHost.replace(/\/$/, '')}/${bundleName}.json`;
-    entry['bundleUrl'] = url;
-    try {
-      const bundle = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-      entry['anonymousStatus'] = bundle.status;
-      if (bundle.ok) {
-        const text = await bundle.text();
-        entry['sha256'] = createHash('sha256').update(text).digest('hex');
-        entry['bytes'] = text.length;
-        try {
-          const parsed = JSON.parse(text) as Record<string, unknown>;
-          entry['topLevelKeys'] = Object.keys(parsed).slice(0, 20);
-          // Find every playlist whose name mentions Ranked, wherever it lives.
-          const found: Ranked[] = [];
-          const walk = (node: unknown) => {
-            if (Array.isArray(node)) return node.forEach(walk);
-            if (!node || typeof node !== 'object') return;
-            const record = node as Record<string, unknown>;
-            if (typeof record['name'] === 'string' && /ranked/i.test(record['name'])) {
-              found.push({
-                id: typeof record['id'] === 'number' ? record['id'] : undefined,
-                name: record['name'],
-                minimumReputation: record['minimumReputation'] as number | undefined,
-                maximumGroupSize: record['maximumGroupSize'] as number | undefined,
-                divisionSpread: record['divisionSpread'] as number | undefined,
-              });
-            }
-            Object.values(record).forEach(walk);
-          };
-          walk(parsed);
-          entry['rankedPlaylists'] = found;
-        } catch {
-          entry['parse'] = 'not JSON';
-        }
+    for (const [key, value] of Object.entries(config)) {
+      if (/(leaderboard|ranking|skillrating)_public_v\d$/.test(key) && value?.startsWith('https://')) {
+        bases.push([`${spaceId.slice(0, 8)}/${key}`, value]);
       }
-    } catch (error) {
-      entry['anonymousStatus'] = `ERROR ${String(error).slice(0, 80)}`;
     }
+    // The SDK's own space leaderboard route, which answered a gateway 404 to GET.
+    bases.push([
+      `${spaceId.slice(0, 8)}/sdkSpacesLeaderboard`,
+      `${UBI_SERVICES}/v1/spaces/${spaceId}/leaderboards/`,
+    ]);
+  }
 
-    report[short] = entry;
+  const rows: Row[] = [];
+
+  async function probe(label: string, url: string, method: string, body?: string) {
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        signal: AbortSignal.timeout(12_000),
+      });
+      const text = await response.text();
+      const picked: Record<string, string> = {};
+      for (const name of INTERESTING_HEADERS) {
+        const value = response.headers.get(name);
+        if (value) picked[name] = value.slice(0, 160);
+      }
+      rows.push({
+        target: label,
+        method,
+        status: response.status,
+        ...(Object.keys(picked).length ? { headers: picked } : {}),
+        // Only when the answer is not one of the three known miss shapes.
+        ...(/no Route matched|UnspecifiedError|"errorCode":1003/.test(text)
+          ? {}
+          : { body: mask(text).slice(0, 300) }),
+      });
+    } catch (error) {
+      rows.push({ target: label, method, status: 0, body: String(error).slice(0, 90) });
+    }
+  }
+
+  for (const [label, base] of bases) {
+    for (const suffix of ['', 'leaderboards', 'ranks']) {
+      const url = `${base}${suffix}`;
+      const name = `${label}${suffix ? '/' + suffix : ''}`;
+      await probe(name, url, 'OPTIONS');
+      await probe(name, url, 'POST', '{}');
+    }
   }
 
   return NextResponse.json(
-    { ok: true, at: new Date().toISOString(), commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null, report },
+    {
+      ok: true,
+      at: new Date().toISOString(),
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      basesProbed: bases.length,
+      // Everything that is not one of the three known miss shapes, plus every
+      // row that carried a route-describing header.
+      interesting: rows.filter((r) => r.body || r.headers),
+      plainMisses: rows.filter((r) => !r.body && !r.headers).length,
+    },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }
