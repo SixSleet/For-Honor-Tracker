@@ -1,26 +1,24 @@
 /**
- * Leaderboard hunt with the game client's own identifiers.
+ * Season 0 re-check, 2026-09-25 (two weeks after launch) — one day after Ranked launched.
  *
- * Not for main. The game shows Season 0 leaderboards full of data, so a
- * serving endpoint exists; the earlier "no endpoint found" described the
- * search, not Ubisoft. The one thing every prior probe withheld is exactly
- * what distinguishes the game client's request from ours: the
- * application_build_id and sandbox_name the client presents, both of which are
- * in the public fh-configuration this project already reads.
+ * Not for main. Runs on this branch's Vercel PREVIEW deployment via the
+ * workflow beside it, because this container cannot reach ubi.com.
  *
- * The operator authorized adding those two identifiers for this probe. The
- * line still held: NO herologin / EOS / EasyAntiCheat handshake is attempted,
- * and no anti-cheat token is forged. This reuses two configuration strings as
- * request headers alongside the ordinary session ticket — nothing more.
+ * Yesterday's pass is written up in RANKED-PROBE-FINDINGS.md. This is not
+ * another dump of the same thing: it carries yesterday's measurements as a
+ * baseline and reports only what MOVED. A day is exactly the window in which
+ * Ubisoft would populate Season 0 boards or flip a switch, and a diff makes
+ * that visible where a second 200-name dump would not.
  *
- * Combined with the still-open method question: the Kong gateway routes on
- * method as well as path, so each target is tried as GET and POST, and
- * route-describing response headers (Allow, Access-Control-Allow-Methods) are
- * captured.
+ * Baselines below were measured yesterday, both spaces identical:
+ *   us-sdkClientUrls.fields    200 templates
+ *   fh-customFeatureSwitches    28 switches
+ *   fh-configuration            73 fields
  *
- * Output is schema only: statuses, route-describing headers, and error text
- * with ids masked. The log is public.
+ * Output is schema only — names, counts, statuses. The log is public, so no
+ * stat values and no ids.
  */
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { verifyGithubActionsToken } from '@/server/github-oidc';
 import { newTraceCollector } from '@/server/http';
@@ -30,25 +28,28 @@ import { readSession } from '@/server/ubisoft-session-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 240;
+export const maxDuration = 120;
 
 const PROBE_AUDIENCE = 'for-honor-tracker-ranked-probe';
 const { login, authHeaders, forceRefresh, UBI_SERVICES } = __internal;
 
-const ROUTE_HEADERS = ['allow', 'access-control-allow-methods', 'www-authenticate', 'server'];
+const BASE_URLS = new Set(`achievementsDefinitions achievementsPlayer allConnections allProfilesApplications allProfilesEntities allProfilesStats allSpacesEntities allSpacesItems allSpacesOffers allgroupTypes applications applicationsMetadata applicationsParameters avatars blocklist blocklistBlockedBy blocklistUnblock calendar calendarLists challenge challengeManualBanking challengeProgression cloudSavesProfilesCloudSaveFiles communityChallengesProfilesParticipations communityChallengesSpaces communityChallengesSpacesProgressions configsEvents connections events eventsDefinitions friends friendsConfigs gamesPlayed gamesPlayedProfiles groupType groups groupsGroupsInvitations groupsInvitationsConfig groupsInvitationsGroupTypeConfig groupsInvitationsInvites groupsInvitationsJoinRequests groupsInvitationsLockState groupsInvitationsProfiles groupsInvitationsUpdateInvite groupsInvitationsUpdateJoinRequest groupsMatchmaking groupsMatchmakingMatches groupsMembers groupsRetentionExpiry groupsRichPresences groupsUgcGenericContents groupsUgcGenericContentsOwn localization localizationAll matchmakingGroupsMatchesPrecise matchmakingProfilesGlobalHarboursocial matchmakingSpaceGlobalHarboursocial moderation moderationPOST news oauthProfilesIdToken partyXboxSync personaProfile personaSpace playerActivityContextsProfiles playerActivityProfiles playerConsents playerConsentsCategory playerConsentsNextAcceptances playerConsentsNextConfig playerConsentsNextProfile playerPrivilegesProfile playerReportsProfile playerReportsSpaceCategories policies profiles profilesActions profilesApplications profilesBattlepassesSeasons profilesBattlepassesSeasonsTiers profilesChallenges profilesEntities profilesExternal profilesFriends profilesGroups profilesInventory profilesInventoryExpiredDetails profilesInventoryInstances profilesInventoryInstancesTransactions profilesInventoryPrimarystore profilesInventoryReserves profilesInventoryTransactions profilesLeaderboard profilesMatches profilesMatchmakingMatches profilesMatchmakingOnlineAccess profilesMeBattlepassesSeasons profilesMeBattlepassesSeasonsSeasonId profilesMeCommunityChallenges profilesMeEvents profilesMeInventoryPrimarystore profilesMeLeaderboard profilesMeRoamingProfiles profilesNotifications profilesNotificationsBatch profilesOffersDiscounts profilesOffersDiscountsMatches profilesOffersDiscountsResolutions profilesParties profilesPlayerPreferences profilesPlayerPreferencesStandard profilesPreciseMatchmakingClient profilesPreciseMatchmakingMatch profilesProfileChallenges profilesProgressionGraph profilesReputation profilesRewards profilesRichPresences profilesSeasonChallenges profilesStats profilesStatsCard profilesToken profilesUgcExternalVideos profilesUgcFavorites profilesUgcGenericContents profilesUgcGenericContentsOwn profilesUgcPhotos profilesUgcPhotosOwn profilesUgcRatings profilesUgcReportContent profilesUgcRequestReportedContent profilesUgcUpdateFavorite profilesUgcUpdateRating profilesUgcViews recommendations remoteLogs sanctionsAppliedSanctions sandboxes secondaryStoreInventoryRulesExecution sessions spacesActions spacesBattlepasses spacesBattlepassesSeasons spacesBattlepassesSeasonsSeasonId spacesChallengepools spacesChallenges spacesCommunityChallenges spacesConfigsPrimarystore spacesConfigsSsiAttributes spacesConfigsSsiListsOfAttributes spacesConfigsSsiRules spacesConfigsUgc spacesEntities spacesGroupsInvitations spacesItems spacesLeaderboard spacesMatches spacesNews spacesOffers spacesParameters spacesParties spacesPartiesPartyIdMembersProfileId spacesPlayerActivity spacesPlayerPreferences spacesPlayerPreferencesStandard spacesRewards spacesRichPresences spacesSeasonChallenges spacesStats spacesStatsCard tLog telemetry tokenProfile tokenSpace trackingSession tradesItemsGifts tradesItemsGiftsConfig tradesOfferGifts tradesOfferGiftsConfig tradesOfferGiftsSimulation tradesProfilesMarketableItems tradesSpaceMarketableItems ubiConnectApplicableTimeLimitedChallengesProfiles ubiConnectCommunityChallengesProfile ubiConnectCommunityChallengesSpace ubiConnectRewardsProfile ubiConnectRewardsSpace ubiConnectTimeLimitedChallengesProfile ubiConnectTimeLimitedChallengesSpace users usersMeOnlineStatuses usersMeOnlineStatusesManualStatus usersOnlineStatuses usersPolicies voicechatConfigPlayfab voicechatConfigVivox voicechatNetworkPlayfab voicechatTokenVivox websocketNotifications websocketServer`.split(' '));
+const BASE_SWITCHES = new Set(`Game Cloud Bazaar Balmung Mercury Metagame RDV_Event RDV_Login RDV_Health Tournament ActivityAfk Arbitration Matchmaking SkillRating MatureFilter PlayerProfile RDV_Challenge US_EventsFlush PlayerReporting Storm_Onion_Auth ActivityAfkSilent ExclusiveFullscreen FileCacheMemProtect ForceCompatFallback StormDedicatedRouter PersistentPlayerGroup SeamlessPlaylistUpdates MatchmakingBlacklistPlayers`.split(' '));
+const BASE_CONFIG_FIELDS = 73;
 
-interface Row {
-  target: string;
-  method: string;
-  withClientIds: boolean;
-  status: number;
-  headers?: Record<string, string>;
-  body?: string;
-}
 
-// The session account is a uplay/PC account, so the PC build id and sandbox
-// are the ones that match its ticket in both spaces.
-const PLATFORM = 'pc';
+/** Playlist bundle the crossplay config named on 2026-09-11, to diff against. */
+const BASE_BUNDLE_CROSSPLAY = '3901.0.0-prod-v3';
+const BASE_BUNDLE_SHA = '71006ea4f9b59931006e030d5c9612224f2ea527a423efd70ab069c6644901f7';
+
+/** Leaderboard names that 404'd yesterday. Season 0 may have created them. */
+const LEADERBOARDS = [
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DL2',
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DM2',
+  'RankingPointsPerGameModeSeasonal.gameMode.R_DOM',
+  'RankingPointsPerGameModeSeasonal',
+  'SeasonalLeaderboard',
+];
 
 export async function GET(request: Request) {
   const presented = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
@@ -62,103 +63,148 @@ export async function GET(request: Request) {
   await forceRefresh(trace);
   const session = await login(trace);
   const profileId = session.profileId || (await readSession())?.profileId || '';
-  const baseHeaders = authHeaders(session);
-  const mask = (t: string) => (profileId ? t.split(profileId).join('{id}') : t);
+  const headers = authHeaders(session);
 
-  const rows: Row[] = [];
+  const report: Record<string, unknown> = {};
 
   for (const spaceId of FOR_HONOR_SPACE_IDS) {
     const short = spaceId.slice(0, 8);
+    const space: Record<string, unknown> = {};
 
-    const r = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
-      headers: baseHeaders,
+    const response = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
+      headers,
       signal: AbortSignal.timeout(15_000),
     });
-    if (!r.ok) continue;
-    const body = (await r.json()) as Record<string, unknown>;
-    const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
-    const config = (((inner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
-      {}) as Record<string, string>);
+    if (response.ok) {
+      const body = (await response.json()) as Record<string, unknown>;
+      const inner = ((body['parameters'] ?? body) as Record<string, unknown>) ?? {};
+      const group = (name: string) =>
+        ((inner[name] as Record<string, unknown>)?.['fields'] ?? {}) as Record<string, unknown>;
 
-    const plat = PLATFORM;
-    const buildId = config[`application_build_id_${plat}`] ?? '';
-    const sandbox = config[`sandbox_name_${plat}`] ?? '';
+      const urlNames = Object.keys(group('us-sdkClientUrls'));
+      const switchNames = Object.keys(group('fh-customFeatureSwitches'));
+      const configFields = Object.keys(group('fh-configuration'));
 
-    // The identifiers under the header names Ubisoft title services use for
-    // them. Unrecognised headers are ignored, so sending several is harmless.
-    const clientHeaders: Record<string, string> = {
-      ...baseHeaders,
-      'Ubi-AppBuildId': buildId,
-      'Ubi-SandboxId': sandbox,
-      'Ubi-RequestedPlatformType': plat === 'pc' ? 'uplay' : plat,
+      space['urlTemplates'] = {
+        count: urlNames.length,
+        added: urlNames.filter((n) => !BASE_URLS.has(n)),
+        removed: [...BASE_URLS].filter((n) => !urlNames.includes(n)),
+      };
+      space['featureSwitches'] = {
+        count: switchNames.length,
+        added: switchNames.filter((n) => !BASE_SWITCHES.has(n)),
+        removed: [...BASE_SWITCHES].filter((n) => !switchNames.includes(n)),
+        // Values matter as much as names here: a switch flipping on is the
+        // change a new mode would show up as.
+        values: Object.fromEntries(
+          Object.entries(group('fh-customFeatureSwitches')).filter(([k]) =>
+            /rank|season|tournament|skill|compet|ladder|elo/i.test(k),
+          ),
+        ),
+      };
+      space['configFields'] = { count: configFields.length, baseline: BASE_CONFIG_FIELDS };
+      // Any title service whose name is ranked-ish, with its URL.
+      space['rankedServices'] = Object.fromEntries(
+        Object.entries(group('fh-configuration')).filter(([k]) =>
+          /rank|season|leaderboard|skill|compet/i.test(k),
+        ),
+      );
+    } else {
+      space['parameters'] = `HTTP ${response.status}`;
+    }
+
+    // The two endpoints that were live yesterday, and the boards that were not.
+    const checks: Record<string, string> = {};
+    const ask = async (name: string, url: string) => {
+      try {
+        const r = await fetch(url, { headers, signal: AbortSignal.timeout(12_000) });
+        const t = await r.text();
+        let keys = '';
+        try {
+          keys = Object.keys(JSON.parse(t) as object).join(',');
+        } catch {
+          keys = '(non-JSON)';
+        }
+        checks[name] = `${r.status} keys:${keys}`;
+      } catch (error) {
+        checks[name] = `ERROR ${String(error).slice(0, 60)}`;
+      }
     };
 
-    // The ranked-relevant service roots this space advertises.
-    const bases: Array<[string, string]> = [];
-    for (const [key, value] of Object.entries(config)) {
-      if (/(leaderboard|ranking|skillrating)_public_v\d$/.test(key) && value?.startsWith('https://')) {
-        bases.push([key, value]);
-      }
+    await ask('communitystats v1', `${UBI_SERVICES}/v1/spaces/${spaceId}/communitystats`);
+    await ask('battlepasses/seasons v2', `${UBI_SERVICES}/v2/spaces/${spaceId}/battlepasses/seasons`);
+    await ask('profiles/me/ranks v1', `${UBI_SERVICES}/v1/profiles/me/ranks`);
+    await ask('profiles/{id}/reputation v1', `${UBI_SERVICES}/v1/profiles/${profileId}/reputation`);
+    for (const name of LEADERBOARDS) {
+      await ask(
+        `leaderboard ${name}`,
+        `${UBI_SERVICES}/v1/spaces/${spaceId}/leaderboards/${encodeURIComponent(name)}?profileId=${profileId}`,
+      );
     }
 
-    async function probe(label: string, url: string, method: string, withIds: boolean) {
+    // The public, no-auth playlist bundle the config points at — season and
+    // ranked-playlist definitions. Diffed against the 2026-09-11 snapshot.
+    // Re-read the config group here rather than reuse the one scoped to the
+    // parameters fetch above.
+    const cfgResponse = await fetch(`${UBI_SERVICES}/v1/spaces/${spaceId}/parameters`, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+    const cfgBody = cfgResponse.ok
+      ? ((await cfgResponse.json()) as Record<string, unknown>)
+      : {};
+    const cfgInner = ((cfgBody['parameters'] ?? cfgBody) as Record<string, unknown>) ?? {};
+    const config = (((cfgInner['fh-configuration'] as Record<string, unknown>)?.['fields'] ??
+      {}) as Record<string, string>);
+    const bundleName = config['hn_default_playlist_bundle_name'];
+    const bundleHost = config['hn_playlist_bundles_url'] ?? config['playlist_versions_url'];
+    const bundle: Record<string, unknown> = {
+      name: bundleName ?? null,
+      changedSinceSep11: bundleName ? bundleName !== BASE_BUNDLE_CROSSPLAY : null,
+      next: config['hn_next_playlist_bundle_name'] || '(none)',
+    };
+    if (bundleName && bundleHost) {
       try {
-        const response = await fetch(url, {
-          method,
-          headers: withIds ? clientHeaders : baseHeaders,
-          ...(method === 'POST' ? { body: '{}' } : {}),
-          signal: AbortSignal.timeout(12_000),
+        const b = await fetch(`${bundleHost.replace(/\/$/, '')}/${bundleName}.json`, {
+          signal: AbortSignal.timeout(20_000),
         });
-        const text = await response.text();
-        const picked: Record<string, string> = {};
-        for (const name of ROUTE_HEADERS) {
-          const value = response.headers.get(name);
-          if (value) picked[name] = value.slice(0, 160);
+        bundle['anonymousStatus'] = b.status;
+        if (b.ok) {
+          const text = await b.text();
+          const sha = createHash('sha256').update(text).digest('hex');
+          bundle['sha256'] = sha;
+          bundle['sameBytesAsSep11'] = sha === BASE_BUNDLE_SHA;
+          try {
+            const parsed = JSON.parse(text) as Record<string, unknown>;
+            const ranked: Array<Record<string, unknown>> = [];
+            const walk = (n: unknown) => {
+              if (Array.isArray(n)) return n.forEach(walk);
+              if (!n || typeof n !== 'object') return;
+              const rec = n as Record<string, unknown>;
+              if (typeof rec['name'] === 'string' && /ranked/i.test(rec['name'])) {
+                ranked.push({ id: rec['id'], name: rec['name'], minimumReputation: rec['minimumReputation'] });
+              }
+              Object.values(rec).forEach(walk);
+            };
+            walk(parsed);
+            bundle['rankedPlaylists'] = ranked;
+            bundle['saveDate'] = (parsed as { saveDate?: unknown }).saveDate ?? null;
+          } catch {
+            bundle['parse'] = 'not JSON';
+          }
         }
-        rows.push({
-          target: `${short}/${label}`,
-          method,
-          withClientIds: withIds,
-          status: response.status,
-          ...(Object.keys(picked).length ? { headers: picked } : {}),
-          ...(/no Route matched|UnspecifiedError|"errorCode":1003/.test(text)
-            ? {}
-            : { body: mask(text).slice(0, 300) }),
-        });
       } catch (error) {
-        rows.push({
-          target: `${short}/${label}`,
-          method,
-          withClientIds: withIds,
-          status: 0,
-          body: String(error).slice(0, 90),
-        });
+        bundle['anonymousStatus'] = `ERROR ${String(error).slice(0, 60)}`;
       }
     }
+    space['playlistBundle'] = bundle;
 
-    for (const [key, base] of bases) {
-      for (const suffix of ['', 'leaderboards', `profiles/${profileId}`]) {
-        const url = `${base}${suffix}`;
-        const label = `${key}${suffix ? '/' + suffix.replace(profileId, '{id}') : ''}`;
-        // Each target four ways: {GET,POST} x {plain ticket, ticket+client ids}.
-        await probe(label, url, 'GET', false);
-        await probe(label, url, 'GET', true);
-        await probe(label, url, 'POST', true);
-      }
-    }
+    space['checks'] = checks;
+    report[short] = space;
   }
 
   return NextResponse.json(
-    {
-      ok: true,
-      at: new Date().toISOString(),
-      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-      tried: rows.length,
-      // Everything that is not one of the three known miss shapes, plus any
-      // row that carried a route-describing header.
-      interesting: rows.filter((r) => r.body || r.headers),
-      plainMisses: rows.filter((r) => !r.body && !r.headers).length,
-    },
+    { ok: true, at: new Date().toISOString(), commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null, report },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }
