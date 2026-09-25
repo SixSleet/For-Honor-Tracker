@@ -236,3 +236,37 @@ session-ticket-reachable endpoint serves it.** The usable new surface from all
 of this remains the public, no-auth playlist bundle (season/playlist
 definitions) and the space-scoped communitystats and battlepasses/seasons
 endpoints — none of it per-player rank.
+
+## Two-week re-check, 2026-09-25
+
+Diffed against the 2026-09-11 baseline. The API surface has not moved; the
+public playlist bundle has rolled but carries the same ranked definitions.
+
+| | PC (882ad5b5) | Crossplay (c2294cd6) |
+| --- | --- | --- |
+| URL templates | 200, 0 added / 0 removed | 200, 0 added / 0 removed |
+| Feature switches | 28, 0 added / 0 removed | 28, 0 added / 0 removed |
+| Tournament / SkillRating | true / true | true / true |
+| config fields | 54 | 73 |
+| communitystats v1 | 200 `{stats}` | 200 `{stats}` |
+| battlepasses/seasons v2 | 200 `{seasons}` | 200 `{seasons}` |
+| profiles/me/ranks, reputation | 404 | 404 |
+| all five leaderboard names | 404 | 404 |
+
+**No new API surface, no new switch, nothing populated.** Two weeks of a live
+season did not turn on any per-player ranked endpoint for the session ticket.
+
+### The playlist bundle rolled, definitions unchanged
+
+The crossplay bundle moved `3901.0.0-prod-v3` → **`3901.0.0-prod-starter_dominion-v3`**
+(anonymous fetch still 200, new sha256 `26aa4922…`, `sameBytesAsSep11: false`).
+Its ranked playlists are unchanged: 22 "1v1 Duel (Ranked)", 135 "4v4 Dominion
+(Ranked)", 136 "1v1 Duel (Ranked V2)". Its embedded `saveDate` is still
+2026-09-10, so the content is the same authored asset under a new bundle name
+(the "starter_dominion" label is the only visible change). PC still names
+`3501.0.0-prod-turbo-breach-v2` and still 403s anonymously.
+
+So the only movement in two weeks is a bundle rename with identical ranked
+content. The standing conclusion holds: the per-player rank/leaderboard data
+the game shows is reachable only through the game's own auth/anti-cheat path,
+which this project does not take.
