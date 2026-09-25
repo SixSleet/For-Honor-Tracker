@@ -270,3 +270,51 @@ So the only movement in two weeks is a bundle rename with identical ranked
 content. The standing conclusion holds: the per-player rank/leaderboard data
 the game shows is reachable only through the game's own auth/anti-cheat path,
 which this project does not take.
+
+## A different avenue: the unprobed hero services (2026-09-25)
+
+Every earlier probe hit only heroranking / heroleaderboard / skillrating /
+playerstats2. This tried the rest of the hero-service family for the first
+time, plus a full structural parse of the public bundle. Plain-ticket GETs
+(metagame hosts also with no auth), key-names-only output.
+
+| Service | Host | ticket | no-auth |
+| --- | --- | --- | --- |
+| game2web (+ /profiles/{id}) | public-ubiservices | 404 | — |
+| spectator, gameutility (+ /profiles/{id}) | public-ubiservices | 404 UnspecifiedError | — |
+| arbitration | *.hero.fleet.ubi.com | 404 | — |
+| metagame, metagame_evolution | *.hero.fleet.ubi.com | 404 | 404 |
+| metagameworldstate, metagamefactionstrength | metagame.forhonor.ubisoft.com | **403** | **403** |
+
+Nothing readable. game2web and gameutility behave like the other title
+services — reached, wrong path (UnspecifiedError / 404). The metagame world
+hosts 404 at their root; `metagame.forhonor.ubisoft.com` returns 403 with and
+without the ticket, so it is access-gated the same way the ranked services are,
+not opened by a session.
+
+### The bundle, parsed in full (public, no auth, nothing personal)
+
+`3901.0.0-prod-starter_dominion-v3`, 200, top-level keys `capital`, `capital2`,
+`fronts`, `gameModeCategories`, `playlists`, `saveDate`.
+
+- **playlists**: 12 entries. Full field set —
+  `id, name, activityCardId, crc32, descriptionOasis, entries, matchType,
+  metagame_enabled, nameOasis, playable, playlistType, playTypeConfigMap,
+  ranked, recipeIds, settings, skillFamily, spectatable,
+  totalHeroProgressionRestriction, crossplay, version`.
+  So each playlist carries a `ranked` flag, a `skillFamily`, `settings` and a
+  `playTypeConfigMap` — the full definition of every mode, ranked included.
+- **gameModeCategories**: 4, each `{ name, playlists, oasisName, oasisDescription }`.
+- **fronts**: keys 1/2/3 — the three Faction War fronts.
+
+This is the richest safe, no-auth source found: the complete playlist/mode
+catalogue, including which are ranked and their skill families. Still no
+per-player rank.
+
+### Conclusion after the different avenue
+
+Same wall, confirmed from a new direction: no session-ticket-reachable
+endpoint — across the entire hero-service family, not just the ranked four —
+serves per-player rank. The only readable, safe surfaces remain communitystats,
+battlepasses/seasons, and the public playlist bundle, whose full structure is
+now mapped.
